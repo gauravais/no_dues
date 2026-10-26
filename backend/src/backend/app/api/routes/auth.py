@@ -207,6 +207,7 @@ def verify_signup_otp(body: SignupVerifyRequest, db: SessionDep) -> TokenRespons
     # Create student User
     user = User(
         email=roster.email.strip().lower(),
+        full_name=roster.name,
         password_hash=hash_password(body.password),
         role=UserRole.student,
         department_id=None,
@@ -303,6 +304,7 @@ def get_my_profile(current_user: CurrentUserDep) -> UserMeResponse:
     return UserMeResponse(
         id=current_user.id,
         email=current_user.email,
+        full_name=current_user.full_name,
         role=current_user.role.value,
         department_id=current_user.department_id,
         department_name=dept_name,

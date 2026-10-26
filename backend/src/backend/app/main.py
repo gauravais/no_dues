@@ -7,7 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.app.api.routes import auth, student, department, hod
+from backend.app.api.routes import auth, student, department, hod, verify, registrar, admin
 from backend.app.core.config import settings
 
 APP_DESCRIPTION = """
@@ -58,6 +58,18 @@ TAGS_METADATA = [
         "name": "HoD",
         "description": "Final review, clearance certification, and remarks by Academic Department Chairpersons (HoD).",
     },
+    {
+        "name": "Public Verification",
+        "description": "Public certificate verification by UUID code or QR code link (no authentication required).",
+    },
+    {
+        "name": "Registrar / Accounts",
+        "description": "Post-clearance security deposit reconciliation, deductions, and payment reference recording.",
+    },
+    {
+        "name": "Admin",
+        "description": "Administrative roster CSV upload, student profile edits, staff user creation, and access management.",
+    },
 ]
 
 app = FastAPI(
@@ -96,6 +108,9 @@ app.include_router(auth.router)
 app.include_router(student.router)
 app.include_router(department.router)
 app.include_router(hod.router)
+app.include_router(verify.router)
+app.include_router(registrar.router)
+app.include_router(admin.router)
 
 
 @app.get("/", tags=["Health"], include_in_schema=False)

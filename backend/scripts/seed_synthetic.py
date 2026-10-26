@@ -460,6 +460,7 @@ def seed(session) -> None:
     # Admin (no department)
     upsert_returning_id(session, User, ["email"], {
         "email": "admin@example.edu",
+        "full_name": "System Administrator (Demo)",
         "password_hash": pw_hash,
         "role": UserRole.admin,
         "department_id": None,
@@ -472,6 +473,7 @@ def seed(session) -> None:
     rs_branch_id = service_dept_ids["R&S Branch"]
     upsert_returning_id(session, User, ["email"], {
         "email": "registrar.accounts@example.edu",
+        "full_name": "Accounts Officer (Demo)",
         "password_hash": pw_hash,
         "role": UserRole.registrar_accounts,
         "department_id": rs_branch_id,
@@ -488,6 +490,7 @@ def seed(session) -> None:
             continue
         upsert_returning_id(session, User, ["email"], {
             "email": officer_email,
+            "full_name": f"{dept_name} Officer (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.dept_officer,
             "department_id": dept_id,
@@ -508,6 +511,7 @@ def seed(session) -> None:
         email = f"{slug}.officer@example.edu"
         upsert_returning_id(session, User, ["email"], {
             "email": email,
+            "full_name": f"{dept_name} In-Charge (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.dept_officer,
             "department_id": dept_id,
@@ -521,6 +525,7 @@ def seed(session) -> None:
         slug = DEPT_SLUG[dept_name]
         upsert_returning_id(session, User, ["email"], {
             "email": f"officer.{slug}@example.edu",
+            "full_name": f"{dept_name} Officer (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.dept_officer,
             "department_id": dept_id,
@@ -530,6 +535,7 @@ def seed(session) -> None:
         })
         upsert_returning_id(session, User, ["email"], {
             "email": f"hod.{slug}@example.edu",
+            "full_name": f"Chairperson {dept_name} (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.hod,
             "department_id": dept_id,
@@ -579,6 +585,7 @@ def seed(session) -> None:
         # Student user (email same as roster email — unique on users table)
         upsert_returning_id(session, User, ["email"], {
             "email": s["email"],
+            "full_name": s["name"],
             "password_hash": pw_hash,
             "role": UserRole.student,
             "department_id": None,

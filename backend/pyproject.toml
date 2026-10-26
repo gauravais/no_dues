@@ -17,6 +17,8 @@ dependencies = [
     "pydantic-settings>=2.16.1",
     "pyjwt>=2.15.1",
     "python-dotenv>=1.2.4",
+    "qrcode[pil]>=8.2",
+    "reportlab>=5.1.0",
     "sqlalchemy>=2.1.6",
 ]
 

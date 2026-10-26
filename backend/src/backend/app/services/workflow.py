@@ -145,6 +145,9 @@ def create_request(session: Session, student_user: User) -> ClearanceRequest:
     if not roster:
         raise WorkflowNotFoundError("Student roster entry not found.")
 
+    if not roster.bank_detail:
+        raise WorkflowBadRequestError("Bank details must be provided before applying for clearance.")
+
     # Check existing active requests
     existing_active = session.execute(
         select(ClearanceRequest).where(

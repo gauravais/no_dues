@@ -1,6 +1,6 @@
 # SVSU No-Dues Clearance System — Frontend Developer API Guide
 
-Welcome! This guide is the complete contract for frontend engineers building the React application. You do not need database access; everything is managed through the FastAPI REST API and documented interactively via Swagger UI.
+Welcome! This guide is the complete contract for frontend engineers building the React application. You do not need direct database access; everything is managed through the FastAPI REST API and documented interactively via Swagger UI.
 
 ---
 
@@ -29,14 +29,18 @@ uv run fastapi dev src/backend/app/main.py --host 0.0.0.0 --port 8000
 
 ---
 
-## 2. Clearance Workflow & Architecture
+## 2. Complete End-to-End Clearance Workflow
 
 ```mermaid
 flowchart TD
-    Start([Student Applies]) --> CreateReq["POST /student/requests"]
+    Start([Student Registers / Logs In]) --> BankCheck{Bank Details Present?}
+    BankCheck -- "No" --> SetBank["PUT /student/bank-details<br/>(Account & IFSC validation)"]
+    SetBank --> BankCheck
+    BankCheck -- "Yes" --> CreateReq["POST /student/requests<br/>(Student Applies for No-Dues)"]
+    
     CreateReq --> Submitted["Status: SUBMITTED<br/>Parallel Department Reviews Dispatched"]
 
-    subgraph ParallelReviews ["Parallel Department Reviews"]
+    subgraph ParallelReviews ["Parallel Department Reviews (dept_officer)"]
         DeptAlways["Always Applicable<br/>(Library, Sports, Accounts, etc.)"]
         DeptHostel["Hostel Office<br/>(If student is hosteller)"]
         DeptAssigned["Assigned Labs & Workshops<br/>(If student mapped to lab)"]
@@ -52,145 +56,141 @@ flowchart TD
 
     CheckDecision -- "No, All Approved" --> HoDReview["Status: HOD_REVIEW<br/>Queue of Academic Chairperson / HoD"]
 
-    HoDReview --> HoDDecision{HoD Decision}
+    HoDReview --> HoDDecision{Chairperson / HoD Decision}
     HoDDecision -- "HoD Rejects (with Remarks)" --> HoDActionNeeded["Status: ACTION_NEEDED<br/>(Unresolved HoD Remarks)"]
     HoDActionNeeded --> ResubmitHoD["Student Addresses Issue & Calls<br/>POST /student/requests/{id}/resubmit-to-hod"]
     ResubmitHoD --> HoDReview
 
     HoDDecision -- "HoD Approves" --> Cleared["Status: CLEARED<br/>Official Certificate Issued (UUID Code)"]
-    Cleared --> RefundVerification["Registration & Accounts Verification"]
-    RefundVerification --> RefundVerified["Status: REFUND_VERIFIED<br/>Deposit Refund Processed"]
+    
+    Cleared --> CertDownload["GET /student/requests/{id}/certificate.pdf<br/>(PDF on demand with QR code)"]
+    CertDownload --> PublicVerify["Public QR Verification<br/>GET /verify/{certificate_code}"]
+
+    Cleared --> RegistrarQueue["GET /registrar/queue<br/>(Registrar / Accounts Review)"]
+    RegistrarQueue --> VerifyRefund["POST /registrar/requests/{id}/verify-refund<br/>(Enter deductions & verify final amount)"]
+    VerifyRefund --> RefundVerified["Status: REFUND_VERIFIED<br/>Refund Status: VERIFIED"]
+    RefundVerified --> MarkDisbursed["POST /registrar/requests/{id}/mark-processed<br/>(Record Bank UTR / NEFT Reference)"]
+    MarkDisbursed --> End([Status: REFUND_VERIFIED<br/>Refund Status: PROCESSED])
 ```
 
 ---
 
-## 3. Status Definitions
+## 3. Status Glossary
 
 ### Clearance Request Statuses (`status`)
 | Status | Meaning | What the Frontend Should Show |
 |---|---|---|
-| `SUBMITTED` | Application received and reviews are actively pending across departments. | "Clearance in Progress" badge; show progress bar and department breakdown. |
+| `SUBMITTED` | Application received and reviews are actively pending across departments. | "Clearance in Progress" badge; show progress bar and department checklist. |
 | `ACTION_NEEDED` | One or more departments or the HoD rejected the request. | Alert banner with rejection remarks; show "Resubmit" button next to rejected department(s). |
 | `HOD_REVIEW` | All department clearances approved; awaiting final Chairperson / HoD clearance. | "Awaiting Final HoD Approval" banner. |
-| `CLEARED` | HoD gave final clearance; official certificate has been generated. | Success banner; show "Download / View Certificate" button. |
-| `REFUND_VERIFIED`| Accounts & Registration verified security deposit refund. | "Refund Processed" confirmation with deposit amount. |
+| `CLEARED` | HoD gave final clearance; official certificate generated. | Success banner; show "Download Certificate (PDF)" button. |
+| `REFUND_VERIFIED`| Accounts & Registration verified or processed security deposit refund. | "Refund Verified / Disbursed" confirmation badge with payment reference. |
 
-### Department Approval Statuses (`approval_status`)
-- `PENDING`: Department review is pending.
-- `APPROVED`: Department officer confirmed no dues.
-- `REJECTED`: Department officer flagged dues/issues (remarks are mandatory).
-
----
-
-## 4. How to Authenticate & Test in Swagger
-
-1. Open [http://localhost:8000/docs](http://localhost:8000/docs).
-2. Click the green **Authorize** button at the top right.
-3. In the modal:
-   - **Username**: Enter the demo user's email (see table below).
-   - **Password**: Enter the value configured in `SEED_DEFAULT_PASSWORD` in your `backend/.env`.
-   - Click **Authorize**, then **Close**.
-4. Swagger will now automatically attach the `Authorization: Bearer <token>` header to all requests.
+### Refund Statuses (`refund_status`)
+- `PENDING_VERIFICATION`: Initial state when clearance request is created. Initial deposit amount locked from roster.
+- `VERIFIED`: Registrar/Accounts verified deductions (if any) and approved final refund amount.
+- `PROCESSED`: Bank payment reference recorded; refund disbursed to student bank account.
 
 ---
 
-## 5. Demo Accounts By Role
+## 4. API Endpoints Reference
 
-> **Password**: For all seeded accounts below, the password is the value set in `SEED_DEFAULT_PASSWORD` in `backend/.env`. (Never hardcode or commit this password).
+### Authentication (`/auth`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/auth/signup/request-otp` | Public | Validates student against roster and dispatches 6-digit OTP. |
+| `POST` | `/auth/signup/verify` | Public | Verifies OTP (max 5 attempts), sets password, and provisions account. |
+| `POST` | `/auth/login` | Public | OAuth2 password flow (`username` = email) returning Bearer JWT token. |
+| `GET` | `/auth/me` | Authenticated | Returns current authenticated user, full name, role, and roster info. |
 
-| Role | Email Address | Department / Affiliation | Notes |
-|---|---|---|---|
-| `admin` | `admin@example.edu` | Central Administration | System management |
-| `registrar_accounts` | `registrar.accounts@example.edu` | R&S Branch | Refund verification |
-| `hod` | `hod.csit@example.edu` | Skill Department of CS/IT | Chairperson for CS/IT students |
-| `hod` | `hod.auto@example.edu` | Skill Department of Automotive Studies | Chairperson for Automotive students |
-| `hod` | `hod.cmt@example.edu` | Construction Management & Tech | Chairperson for CMT students |
-| `hod` | `hod.greentech@example.edu` | Skill Department of Green Technology | Chairperson for Green Tech students |
-| `hod` | `hod.industry40@example.edu` | Skill Department of Industry 4.0 | Chairperson for Industry 4.0 students |
-| `dept_officer` | `library.officer@example.edu` | Library | Always applicable |
-| `dept_officer` | `sports.officer@example.edu` | Sports | Always applicable |
-| `dept_officer` | `hostel.officer@example.edu` | Hostel (Boys/Girls) | Hosteller students only |
-| `dept_officer` | `officer.csit@example.edu` | Skill Department of CS/IT | Academic department office review |
-| `dept_officer` | `lab1.officer@example.edu` | Lab-1 | Assigned lab review |
-| `student` | `arjun.mehta@example.edu` | B.Tech Computer Engineering | DEMO2026001 (Hosteller, Labs 2 & 5) |
-| `student` | `priya.sharma@example.edu` | MCA | DEMO2026002 (Hosteller, Lab 3) |
-| `student` | `rohan.verma@example.edu` | B.Voc Robotics & Automation | DEMO2026003 (Hosteller, Workshop 1) |
-| `student` | `sneha.patel@example.edu` | B.Voc Solar Technology | DEMO2026004 (Day scholar) |
-| `student` | `vikram.singh@example.edu` | Diploma in Civil Engineering | DEMO2026005 (Day scholar) |
+### Student Clearance & Profile (`/student`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/student/bank-details` | `student` | Returns masked account number (`********1234`), IFSC, holder name, bank address. |
+| `PUT` | `/student/bank-details` | `student` | Updates bank details (validates 9-18 digit account, standard IFSC). Never echoes full number. |
+| `POST` | `/student/requests` | `student` | Initiates clearance application (fails if bank details are missing). |
+| `GET` | `/student/requests/current` | `student` | Returns active clearance request, department checklist, and HoD remarks. |
+| `POST` | `/student/requests/{id}/departments/{dept_id}/resubmit` | `student` | Resubmits a rejected department review back to `PENDING`. |
+| `POST` | `/student/requests/{id}/resubmit-to-hod` | `student` | Resubmits an HoD-rejected request back to `HOD_REVIEW`. |
+| `GET` | `/student/requests/{id}/certificate.pdf` | `student` | Downloads official clearance certificate with QR code (only for owner when CLEARED). |
+
+### Department Officers (`/department`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/department/queue` | `dept_officer` | Returns pending approval tasks for the officer's assigned department. |
+| `POST` | `/department/approvals/{id}/decision` | `dept_officer` | Submits approval or rejection (with required remarks) for an approval line. |
+
+### Chairperson / HoD (`/hod`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/hod/queue` | `hod` | Returns clearance requests waiting in `HOD_REVIEW` for the Chairperson's department. |
+| `GET` | `/hod/requests/{id}` | `hod` | Retrieves full student clearance dossier and all department sign-offs. |
+| `POST` | `/hod/requests/{id}/decision` | `hod` | Approves clearance (issuing certificate number) or rejects it with remarks. |
+
+### Public Verification (`/verify`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/verify/{certificate_code}` | Public | Public certificate check. Returns `{valid, issued_at, masked_registration_number, programme, department}`. No privacy leaks. |
+
+### Registrar / Accounts (`/registrar`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/registrar/queue` | `registrar_accounts` | Paginated queue of requests in `CLEARED` status. |
+| `POST` | `/registrar/requests/{id}/verify-refund` | `registrar_accounts` | Enters deductions (`0 <= deductions <= deposit`), sets `final_amount`, status to `REFUND_VERIFIED`. |
+| `POST` | `/registrar/requests/{id}/mark-processed` | `registrar_accounts` | Records bank transaction reference (`payment_reference`), sets refund status to `PROCESSED`. |
+
+### University Administration (`/admin`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `POST` | `/admin/roster/upload` | `admin` | Uploads student roster CSV; returns row-by-row created/updated/rejected report. |
+| `GET` | `/admin/roster` | `admin` | Paginated roster search by registration number, name, or email. |
+| `PATCH` | `/admin/roster/{id}` | `admin` | Updates hosteller status, deposit amount, address, or mobile. |
+| `PUT` | `/admin/roster/{id}/assigned-departments` | `admin` | Replaces assigned laboratories / workshops for a student. |
+| `POST` | `/admin/users` | `admin` | Provisions staff user (`dept_officer`, `hod`, `registrar_accounts`). Returns one-time temporary password. |
+| `POST` | `/admin/users/{id}/reset-password` | `admin` | Generates a new one-time temporary password for a user. |
+| `PATCH` | `/admin/users/{id}/active` | `admin` | Activates/deactivates user (admin cannot deactivate themselves). |
 
 ---
 
-## 6. Student Sign-up & OTP Test Flow
+## 5. Seeded Demo Accounts
 
-Use these pre-seeded roster records to test the student registration flow:
+All seeded accounts use password: **`SeedPass@123`**
 
-| Registration Number | Official Email | Enrolled Course |
+| Role | Email Address | Display Name / Department |
 |---|---|---|
-| `DEMO2026006` | `aman.gupta@example.edu` | B.Tech. Computer Science & Engineering |
-| `DEMO2026007` | `kavita.rao@example.edu` | B.Voc Robotics and Automation |
-| `DEMO2026008` | `deepak.joshi@example.edu` | D.Voc Draughtsmanship (Civil) |
-
-### Step-by-Step Flow:
-1. **Request OTP**:
-   - `POST /auth/signup/request-otp`
-   ```json
-   {
-     "registration_number": "DEMO2026006",
-     "email": "aman.gupta@example.edu"
-   }
-   ```
-2. **Retrieve the OTP**:
-   - In development, the OTP is printed directly in the backend terminal console log:
-     ```
-     ============================================================
-     [NO-DUES EMAIL SERVICE]
-     To: aman.gupta@example.edu
-     Subject: Your No-Dues Signup One-Time Password (OTP)
-     Registration Number: DEMO2026006
-     One-Time Password: 123456
-     Valid for: 10 minutes
-     ============================================================
-     ```
-   *(If `DEV_RETURN_OTP=true` in `.env`, the response JSON also includes `"dev_otp": "123456"`).*
-3. **Verify OTP & Set Password**:
-   - `POST /auth/signup/verify`
-   ```json
-   {
-     "registration_number": "DEMO2026006",
-     "otp": "123456",
-     "password": "MyStrongPassword@2026"
-   }
-   ```
-   - Returns `{ "access_token": "...", "token_type": "bearer" }`.
-   - Store this token in `localStorage` or session state for subsequent API calls.
+| **Admin** | `admin@example.edu` | System Administrator (Demo) |
+| **Registrar / Accounts** | `registrar.accounts@example.edu` | Accounts Officer (Demo) |
+| **Chairperson (HoD) CS/IT** | `hod.csit@example.edu` | Chairperson Skill Department of CS/IT (Demo) |
+| **Library Officer** | `library.officer@example.edu` | Library Officer (Demo) |
+| **Hostel Warden** | `hostel.warden@example.edu` | Hostel (Boys/Girls) Officer (Demo) |
+| **Sports Officer** | `sports.officer@example.edu` | Sports Officer (Demo) |
+| **Student 1 (Day Scholar)** | `aarav.sharma@example.edu` | Aarav Sharma (DEMO2026001, B.Tech CE) |
+| **Student 2 (Hosteller)** | `priya.sharma@example.edu` | Priya Sharma (DEMO2026002, B.Tech CSE) |
 
 ---
 
-## 7. Recommended Frontend Implementation Order
+## 6. End-to-End Demo Checklist for Teammates
 
-Build your React pages and components in this sequence for smooth incremental delivery:
+Follow this checklist to demonstrate the full application lifecycle:
 
-1. **Authentication Layer**:
-   - **Login Page** (`POST /auth/login`): Standard username (email) and password form.
-   - **Signup Page / Modal** (`POST /auth/signup/request-otp` & `POST /auth/signup/verify`): Two-step wizard (enter registration number & email, followed by 6-digit OTP and password).
-   - **Auth Context & Interceptor**: Store JWT, attach `Authorization: Bearer <token>` to all requests, redirect to `/login` on 401.
-   - **Profile Header** (`GET /auth/me`): Display student name, course, and security deposit amount.
-2. **Student Clearance Dashboard**:
-   - **Status Card** (`GET /student/requests/current`): Shows overall status, progress bar (`x of y approved`), and HoD remarks if rejected.
-   - **Empty State**: If 404 is returned, show an "Apply for No-Dues Clearance" button (`POST /student/requests`).
-   - **Department Progress Table**: Displays each applicable department with badge status (`PENDING`, `APPROVED`, `REJECTED`).
-   - **Department Resubmit Button**: If an item is `REJECTED`, display a "Resubmit" action calling `POST /student/requests/{id}/departments/{dept_id}/resubmit`.
-   - **HoD Resubmit Button**: If overall status is `ACTION_NEEDED` and `hod_remarks` are present, show a "Resubmit to HoD" button calling `POST /student/requests/{id}/resubmit-to-hod`.
-3. **Department Officer Dashboard**:
-   - **Clearance Queue Table** (`GET /department/queue?status=PENDING`): Shows pending student requests with student name, registration number, course, and resubmission count.
-   - **Review Action Dialog** (`POST /department/approvals/{id}/decision`):
-     - "Approve" button (`decision: "APPROVED"`).
-     - "Reject" button with a mandatory multiline text area for remarks (`decision: "REJECTED"`).
-4. **Chairperson / HoD Dashboard**:
-   - **HoD Queue** (`GET /hod/queue`): Shows requests ready for final clearance (`HOD_REVIEW`).
-   - **Detailed Student Review Modal** (`GET /hod/requests/{id}`): Displays all departmental approvals and verifies no dues remain across campus.
-   - **Final Decision Action** (`POST /hod/requests/{id}/decision`):
-     - "Grant Final Clearance" (`decision: "APPROVED"`).
-     - "Reject Clearance" with mandatory remarks (`decision: "REJECTED"`).
-5. **Clearance Certificate View**:
-   - Displays the official clearance confirmation and certificate code once `status == "CLEARED"`.
+- [ ] **Step 1: Check Bank Details**
+  - Log in as `aarav.sharma@example.edu`.
+  - Call `GET /student/bank-details` -> verify masked account `********0001`.
+  - Update with `PUT /student/bank-details` -> verify masked response.
+- [ ] **Step 2: Submit Clearance Application**
+  - Call `POST /student/requests` -> status `SUBMITTED`, parallel reviews dispatched.
+- [ ] **Step 3: Department Officers Approve / Reject**
+  - Log in as `library.officer@example.edu` -> `GET /department/queue`.
+  - Call `POST /department/approvals/{id}/decision` with `{"decision": "APPROVED"}`.
+  - Approve all other departments.
+- [ ] **Step 4: Chairperson Final Review**
+  - Log in as `hod.csit@example.edu` -> `GET /hod/queue`.
+  - Review request `GET /hod/requests/{id}`.
+  - Call `POST /hod/requests/{id}/decision` with `{"decision": "APPROVED"}` -> status moves to `CLEARED`.
+- [ ] **Step 5: Certificate & Public QR Verification**
+  - Switch back to student -> call `GET /student/requests/{id}/certificate.pdf` -> inspect binary PDF with QR code.
+  - Scan or copy certificate UUID -> call `GET /verify/{uuid}` without auth -> confirms valid issue timestamp and academic department with zero privacy leaks.
+- [ ] **Step 6: Registrar Refund Reconciliation**
+  - Log in as `registrar.accounts@example.edu` -> call `GET /registrar/queue`.
+  - Verify refund: `POST /registrar/requests/{id}/verify-refund` with `{"deductions": 200, "remarks": "Minor lab breakage"}` -> status becomes `REFUND_VERIFIED`.
+  - Mark disbursed: `POST /registrar/requests/{id}/mark-processed` with `{"payment_reference": "NEFT202610260099"}` -> refund status becomes `PROCESSED`.

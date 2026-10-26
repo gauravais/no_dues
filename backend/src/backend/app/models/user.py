@@ -22,6 +22,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     email = Column(String(255), nullable=False, unique=True)
+    full_name = Column(String(255), nullable=True)
     password_hash = Column(String(255), nullable=False)
     role = Column(SAEnum(UserRole, name="user_role"), nullable=False)
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)

@@ -90,6 +90,7 @@ class UserMeResponse(BaseModel):
     """Current authenticated user profile."""
     id: int = Field(..., description="User unique database ID", examples=[1])
     email: EmailStr = Field(..., description="User login email address", examples=["arjun.mehta@example.edu"])
+    full_name: str | None = Field(None, description="User full display name", examples=["Arjun Mehta"])
     role: str = Field(..., description="System role identifier", examples=["student"])
     department_id: int | None = Field(None, description="Assigned department ID (for staff and HoD)", examples=[4])
     department_name: str | None = Field(None, description="Assigned department title", examples=["Skill Department of CS/IT"])

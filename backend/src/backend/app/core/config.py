@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # Swagger / OpenAPI Docs
     ENABLE_DOCS: bool = True
 
+    # Public Verification & Certificate QR Base URL
+    PUBLIC_BASE_URL: str = "http://localhost:8000"
+
     @property
     def DATABASE_URL(self) -> str:
         return (

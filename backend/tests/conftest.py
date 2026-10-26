@@ -179,10 +179,27 @@ def _seed_test_structure(session):
     session.add_all([lab1_dept, lab2_dept])
     session.flush()
 
-    # Staff & HoD Users
+    # Staff, HoD, Registrar & Admin Users
     pw = hash_password("TestPass@123")
+    admin_user = User(
+        email="admin@example.edu",
+        full_name="System Administrator (Demo)",
+        password_hash=pw,
+        role=UserRole.admin,
+        department_id=None,
+        is_active=True,
+    )
+    reg_user = User(
+        email="registrar.accounts@example.edu",
+        full_name="Accounts Officer (Demo)",
+        password_hash=pw,
+        role=UserRole.registrar_accounts,
+        department_id=None,
+        is_active=True,
+    )
     hod_cs = User(
         email="hod.csit@example.edu",
+        full_name="Chairperson CS/IT (Demo)",
         password_hash=pw,
         role=UserRole.hod,
         department_id=cs_dept.id,
@@ -190,6 +207,7 @@ def _seed_test_structure(session):
     )
     hod_auto = User(
         email="hod.auto@example.edu",
+        full_name="Chairperson Automotive (Demo)",
         password_hash=pw,
         role=UserRole.hod,
         department_id=auto_dept.id,
@@ -197,6 +215,7 @@ def _seed_test_structure(session):
     )
     officer_lib = User(
         email="library.officer@example.edu",
+        full_name="Library Officer (Demo)",
         password_hash=pw,
         role=UserRole.dept_officer,
         department_id=lib_dept.id,
@@ -204,6 +223,7 @@ def _seed_test_structure(session):
     )
     officer_sports = User(
         email="sports.officer@example.edu",
+        full_name="Sports Officer (Demo)",
         password_hash=pw,
         role=UserRole.dept_officer,
         department_id=sports_dept.id,
@@ -211,6 +231,7 @@ def _seed_test_structure(session):
     )
     officer_cs = User(
         email="officer.csit@example.edu",
+        full_name="CS/IT Officer (Demo)",
         password_hash=pw,
         role=UserRole.dept_officer,
         department_id=cs_dept.id,
@@ -218,12 +239,13 @@ def _seed_test_structure(session):
     )
     officer_lab1 = User(
         email="lab1.officer@example.edu",
+        full_name="Lab-1 In-Charge (Demo)",
         password_hash=pw,
         role=UserRole.dept_officer,
         department_id=lab1_dept.id,
         is_active=True,
     )
-    session.add_all([hod_cs, hod_auto, officer_lib, officer_sports, officer_cs, officer_lab1])
+    session.add_all([admin_user, reg_user, hod_cs, hod_auto, officer_lib, officer_sports, officer_cs, officer_lab1])
     session.commit()
 
 
