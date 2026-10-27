@@ -6,10 +6,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Sequence
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from backend.app.models.university import (
     Department,
+    Programme,
     DepartmentApplicability,
 )
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
@@ -141,7 +143,13 @@ def create_request(session: Session, student_user: User) -> ClearanceRequest:
     if not student_user.roster_id:
         raise WorkflowBadRequestError("Student user has no linked roster profile.")
 
-    roster = session.get(StudentRoster, student_user.roster_id)
+    # 1. Lock the student's roster row (FOR UPDATE) to serialize request creation per student
+    roster = session.execute(
+        select(StudentRoster)
+        .where(StudentRoster.id == student_user.roster_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
     if not roster:
         raise WorkflowNotFoundError("Student roster entry not found.")
 
@@ -209,7 +217,12 @@ def create_request(session: Session, student_user: User) -> ClearanceRequest:
         },
     )
 
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise WorkflowConflictError("Student already has an active clearance request.")
+
     session.refresh(request)
     return request
 
@@ -223,46 +236,65 @@ def decide_approval(
 ) -> DepartmentApproval:
     """
     Officer decides a pending department approval.
-    - Approval must belong to officer's own department (otherwise 404).
-    - Approval must be PENDING (otherwise 409).
-    - Remarks are mandatory when rejecting (otherwise 400).
-    - Recomputes request status.
-    - Locks clearance request with SELECT ... FOR UPDATE.
+    - Prevents stale-read race conditions by:
+        1. Finding the approval's request_id.
+        2. Locking the clearance_requests row with SELECT ... FOR UPDATE.
+        3. Reloading the approval with populate_existing=True.
+        4. Validating ownership (404), PENDING status (409), and rejection remarks (400).
+    - Recomputes request status and records audit log.
     """
-    # 1. Fetch approval
-    approval = session.get(DepartmentApproval, approval_id)
+    # 1. Find the approval's request_id
+    req_id = session.execute(
+        select(DepartmentApproval.request_id).where(DepartmentApproval.id == approval_id)
+    ).scalar_one_or_none()
+
+    if not req_id:
+        raise WorkflowNotFoundError(f"Department approval {approval_id} not found.")
+
+    # 2. Lock that clearance_requests row with SELECT ... FOR UPDATE
+    req = session.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == req_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not req:
+        raise WorkflowNotFoundError(f"Clearance request {req_id} not found.")
+
+    # 3. RELOAD the approval with populate_existing=True
+    approval = session.execute(
+        select(DepartmentApproval)
+        .where(DepartmentApproval.id == approval_id)
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none()
+
     if not approval:
         raise WorkflowNotFoundError(f"Department approval {approval_id} not found.")
 
+    # 4. Check ownership (404)
     if approval.department_id != officer_user.department_id:
         raise WorkflowNotFoundError("Approval does not belong to your assigned department.")
 
+    # 5. Check PENDING status (409)
     if approval.status != ApprovalStatus.PENDING:
         raise WorkflowConflictError("Approval is not pending decision.")
 
+    # 6. Validate remarks on rejection (400)
     cleaned_remarks = remarks.strip() if remarks else ""
     if decision == ApprovalStatus.REJECTED and not cleaned_remarks:
         raise WorkflowBadRequestError("Remarks are mandatory when rejecting an approval.")
 
-    # 2. Lock clearance request row
-    req = session.execute(
-        select(ClearanceRequest)
-        .where(ClearanceRequest.id == approval.request_id)
-        .with_for_update()
-    ).scalar_one()
-
     old_request_status = req.status.value
     now = datetime.now(timezone.utc)
 
-    # 3. Update approval
+    # 7. Update approval
     approval.status = decision
     approval.remarks = cleaned_remarks if decision == ApprovalStatus.REJECTED else (remarks.strip() if remarks else None)
     approval.decided_by = officer_user.id
     approval.decided_at = now
     approval.updated_at = now
 
-    # 4. Recompute request status
-    # Force loading approvals
+    # 8. Recompute request status
     session.flush()
     session.refresh(req)
     req.status = recompute_request_status(req)
@@ -297,7 +329,8 @@ def resubmit_department(
     Student resubmits only to a specific rejected department.
     - Request must belong to student (otherwise 404).
     - Approval must be REJECTED (otherwise 409).
-    - Sets approval to PENDING, increments resubmission_count, clears decided_by/decided_at.
+    - Sets approval to PENDING, preserves old remarks in previous_remarks, clears remarks,
+      increments resubmission_count, clears decided_by/decided_at.
     - Keeps old remarks in audit log.
     - Recomputes request status.
     """
@@ -327,8 +360,10 @@ def resubmit_department(
     old_remarks = approval.remarks
     old_req_status = req.status.value
 
-    # Reset approval
+    # Reset approval: preserve previous rejection reason, clear current decision remarks
     approval.status = ApprovalStatus.PENDING
+    approval.previous_remarks = old_remarks
+    approval.remarks = None
     approval.resubmission_count += 1
     approval.decided_by = None
     approval.decided_at = None
@@ -349,6 +384,7 @@ def resubmit_department(
         details={
             "department_id": department_id,
             "old_remarks": old_remarks,
+            "previous_remarks": old_remarks,
             "resubmission_count": approval.resubmission_count,
             "old_request_status": old_req_status,
             "new_request_status": req.status.value,
@@ -369,8 +405,8 @@ def hod_decide(
 ) -> ClearanceRequest:
     """
     HoD final decision on a request.
-    - Request must be HOD_REVIEW (otherwise 409).
-    - Student's academic department must equal HoD's department (otherwise 404).
+    - Check request belongs to HoD's academic department (404) BEFORE checking status (409).
+    - Status check raises generic "Request is not awaiting HoD review." (409).
     - APPROVED:
         * status = CLEARED
         * set hod_user_id and hod_decided_at
@@ -390,13 +426,18 @@ def hod_decide(
     if not req:
         raise WorkflowNotFoundError("Clearance request not found.")
 
-    if req.status != ClearanceStatus.HOD_REVIEW:
-        raise WorkflowConflictError(f"Request is in status {req.status.value}, expected HOD_REVIEW.")
+    # 1. Check student academic department FIRST (404)
+    roster = session.get(StudentRoster, req.roster_id)
+    if not roster or not roster.programme_id:
+        raise WorkflowNotFoundError("Student roster entry not found.")
 
-    # Check student academic department
-    student_academic_dept_id = req.roster_entry.programme.academic_department_id
-    if student_academic_dept_id != hod_user.department_id:
+    prog = session.get(Programme, roster.programme_id)
+    if not prog or prog.academic_department_id != hod_user.department_id:
         raise WorkflowNotFoundError("Clearance request does not belong to your academic department.")
+
+    # 2. Check status with generic message (409)
+    if req.status != ClearanceStatus.HOD_REVIEW:
+        raise WorkflowConflictError("Request is not awaiting HoD review.")
 
     cleaned_remarks = remarks.strip() if remarks else ""
     now = datetime.now(timezone.utc)

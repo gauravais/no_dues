@@ -3,7 +3,7 @@ import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, ForeignKey, Enum as SAEnum,
-    DateTime, CheckConstraint, UniqueConstraint, Index
+    DateTime, CheckConstraint, UniqueConstraint, Index, text
 )
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
@@ -46,6 +46,12 @@ class ClearanceRequest(Base):
     __table_args__ = (
         Index("ix_clearance_requests_roster_id", "roster_id"),
         Index("ix_clearance_requests_status", "status"),
+        Index(
+            "uq_clearance_requests_active_roster",
+            "roster_id",
+            unique=True,
+            postgresql_where=text("status <> 'REFUND_VERIFIED'"),
+        ),
     )
 
     roster_entry = relationship("StudentRoster", back_populates="clearance_requests")
@@ -69,6 +75,7 @@ class DepartmentApproval(Base):
         default=ApprovalStatus.PENDING
     )
     remarks = Column(String(1000), nullable=True)
+    previous_remarks = Column(String(1000), nullable=True)
     decided_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     decided_at = Column(DateTime(timezone=True), nullable=True)
     resubmission_count = Column(Integer, nullable=False, default=0)

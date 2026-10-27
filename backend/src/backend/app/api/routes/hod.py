@@ -41,6 +41,7 @@ def _format_hod_detail(req: ClearanceRequest) -> HoDRequestDetailResponse:
             department_kind=a.department.kind.value if a.department else "service",
             status=a.status,
             remarks=a.remarks,
+            previous_remarks=a.previous_remarks,
             decided_at=a.decided_at,
             resubmission_count=a.resubmission_count,
         )

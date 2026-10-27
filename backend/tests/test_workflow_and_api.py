@@ -250,6 +250,8 @@ def test_5_resubmit_rejected_department(db_session: Session):
 
     assert rejected_app.status == ApprovalStatus.PENDING
     assert rejected_app.resubmission_count == 1
+    assert rejected_app.remarks is None
+    assert rejected_app.previous_remarks == "Pending fine"
     # Other approvals still APPROVED
     for a in req.approvals:
         if a.id != rejected_app.id:
@@ -293,7 +295,7 @@ def test_7_hod_premature_or_unauthorized_decision(db_session: Session):
 
     # Premature decision while SUBMITTED -> WorkflowConflictError (409)
     assert req.status == ClearanceStatus.SUBMITTED
-    with pytest.raises(WorkflowConflictError, match="expected HOD_REVIEW"):
+    with pytest.raises(WorkflowConflictError, match="Request is not awaiting HoD review"):
         hod_decide(db_session, hod_cs, req.id, ApprovalStatus.APPROVED, None)
 
     # Move to HOD_REVIEW by approving all

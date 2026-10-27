@@ -12,6 +12,7 @@ class DepartmentApprovalItem(BaseModel):
     department_kind: str = Field(..., description="Department category: academic or service", examples=["service"])
     status: ApprovalStatus = Field(..., description="Current approval status", examples=[ApprovalStatus.PENDING])
     remarks: str | None = Field(None, description="Department officer remarks (mandatory on rejection)", examples=["Fine pending: Rs. 150"])
+    previous_remarks: str | None = Field(None, description="Previous rejection reason before student resubmitted", examples=["Fine pending: Rs. 150"])
     decided_at: datetime | None = Field(None, description="Timestamp when decision was rendered")
     resubmission_count: int = Field(..., description="Number of times student resubmitted to this department", examples=[0])
 

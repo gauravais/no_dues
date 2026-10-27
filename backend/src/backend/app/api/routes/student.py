@@ -47,6 +47,7 @@ def _format_request_response(req: ClearanceRequest) -> CurrentRequestResponse:
             department_kind=a.department.kind.value if a.department else "service",
             status=a.status,
             remarks=a.remarks,
+            previous_remarks=a.previous_remarks,
             decided_at=a.decided_at,
             resubmission_count=a.resubmission_count,
         )
@@ -163,6 +164,7 @@ def resubmit_to_department(
             department_kind=approval.department.kind.value if approval.department else "service",
             status=approval.status,
             remarks=approval.remarks,
+            previous_remarks=approval.previous_remarks,
             decided_at=approval.decided_at,
             resubmission_count=approval.resubmission_count,
         )
