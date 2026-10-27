@@ -1,16 +1,169 @@
-# React + Vite
+# SVSU No-Dues Clearance & Refund System (Frontend)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An institutional digital clearance and security deposit refund portal built for **Shri Vishwakarma Skill University (SVSU)**. This React application digitizes the traditional paper-based no-dues workflow, replacing physical stamp-collecting with parallel departmental reviews, verifiable cryptographic certificates, and automated registrar reconciliation.
 
-Currently, two official plugins are available:
+> **Synthetic Data Disclaimer**: This application is a university capstone project. All data, student profiles, account numbers, and staff names rendered in this demo are entirely synthetic.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 1. Quick Start & Execution
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Prerequisites
+- Node.js (v18+ or v20+)
+- npm (v9+)
+- SVSU FastAPI Backend running (default: `http://localhost:8000`)
 
-## Expanding the ESLint configuration
+### Installation & Development
+```bash
+# Navigate to frontend folder
+cd frontend
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+# Install dependencies
+npm install
+
+# Start development server with Hot Module Replacement (HMR)
+npm run dev
+
+# Run production build (Vite + Rolldown)
+npm run build
+
+# Run ESLint validation
+npm run lint
+
+# Preview production build locally
+npm run preview
+```
+
+---
+
+## 2. Environment Configuration
+
+Create a `.env` or `.env.local` file inside the `frontend/` directory to configure the backend API target:
+
+| Variable | Description | Default |
+|---|---|---|
+| `VITE_API_BASE_URL` | Base URL of the FastAPI backend service | `http://localhost:8000` |
+
+If unset, Axios defaults automatically to `http://localhost:8000`.
+
+---
+
+## 3. Seeded Demo Accounts (Role-Based Testing)
+
+The following seeded accounts are available in the university database for testing each role. In compliance with security standards, passwords are not published here:
+
+| Role | Institutional Email | Assigned Department / Notes |
+|---|---|---|
+| **Student (Day Scholar)** | `aarav.sharma@example.edu` | Academic: CS/IT (Registration: 2200101) |
+| **Student (Hosteller)** | `priya.sharma@example.edu` | Academic: CS/IT (Registration: 2200102) |
+| **Department Officer** | `officer.library@example.edu` | Central Library (Service Dept #7) |
+| **Department Officer** | `officer.cs@example.edu` | Skill Dept of CS/IT (Academic Dept #4) |
+| **Department Officer** | `officer.sports@example.edu` | Sports Section (Service Dept #11) |
+| **Department Officer** | `officer.accounts@example.edu` | Account Section (Service Dept #15) |
+| **Department Officer** | `officer.hostel@example.edu` | Hostel Office (Boys/Girls) (Service Dept #16) |
+| **Chairperson (HoD)** | `hod.cs@example.edu` | Chairperson, Skill Dept of CS/IT |
+| **Registrar / Accounts** | `registrar@example.edu` | University Registrar & Finance Section |
+| **System Administrator** | `admin@example.edu` | Full administrative & provisioning rights |
+
+---
+
+## 4. Role Capabilities & Workflows
+
+### 1. Student Portal (`/student`)
+- **Institutional Identity Verification**: Sign up using pre-seeded university roster credentials and secure OTP verification.
+- **Bank Details Registration**: Register or update IFSC, Account Number, and Account Holder Name (account numbers masked with `****` for privacy).
+- **Parallel Dispatch**: Clearance requests dispatch simultaneously to all applicable academic, service, and residential departments.
+- **Live Visual Timeline**: Real-time progress bar, department status badges (`PENDING`, `APPROVED`, `REJECTED`), and officer remarks.
+- **Direct Resubmission**: If a department rejects a request (e.g. library fine or lab breakage), the student resolves the obligation and resubmits specifically to that department without restarting the entire clearance.
+- **Cryptographic Certificate**: Once all departments and the HoD approve, download an official digital certificate featuring an immutable UUID verification code and QR code.
+
+### 2. Department Officer Queue (`/officer`)
+- **Department Inbox**: Filter pending, approved, and rejected clearance requests assigned to the officer's specific branch.
+- **Action Modal**: Approve or reject with mandatory explanatory remarks.
+- **Concurrency Protection**: Protected against race conditions with backend row-level locking (`SELECT ... FOR UPDATE`).
+- **Student Profile Context**: Inspect hosteller status, student programme, registration number, and submission history.
+
+### 3. Chairperson / HoD Final Review (`/hod`, `/hod/requests/:id`)
+- **Department Queue**: Review clearance requests that have passed all parallel service departments.
+- **Comprehensive Audit View**: Inspect all department decisions, remarks, and clearance timestamps in a unified matrix.
+- **Final Determination**: Approve to issue the official SVSU clearance certificate, or return to the student with revision instructions.
+
+### 4. Registrar & Accounts Verification (`/registrar`)
+- **Disbursement Queue**: List all cleared students awaiting security deposit refund.
+- **Account Verification**: Inspect student bank IFSC, holder name, and masked account details against deposit records.
+- **Refund Execution**: Record university transaction reference numbers (UTR) and disburse security deposits.
+
+### 5. Institutional Administration (`/admin`)
+- **Master Student Roster**: Paginated and searchable directory of graduating students.
+- **Roster Modification**: Update hosteller residency, security deposit amounts, and assign specialized laboratories/workshops.
+- **CSV Batch Ingestion**: Drag-and-drop ingestion of student roster files with instant row-by-row diagnostic feedback (Created, Updated, Rejected).
+- **Staff Provisioning**: Create new department officers, HoDs, and registrar accounts with role-based department constraints.
+- **One-Time Temporary Passwords**: Generates secure random credentials displayed exactly once in a protected security dialog with a clipboard copy button.
+- **Credential Administration**: Trigger on-demand password resets and toggle account active/inactive status by User ID (with self-deactivation protection).
+
+### 6. Public Certificate Verification (`/verify`, `/verify/:code`)
+- **Zero-Authentication Verification**: Publicly accessible page for employers, partner universities, and third parties to verify certificate validity.
+- **QR Code Target**: Resolves directly when scanning the QR code embedded in student clearance certificates.
+- **High-Assurance Results**: Clear visual indicators (check/cross icons + text), issue timestamp, masked registration number, student programme, and department.
+
+---
+
+## 5. Architectural Structure
+
+```
+frontend/
+├── public/                 # Static assets, SVG favicons, icons
+├── src/
+│   ├── api/                # Modular Axios API service callers
+│   │   ├── admin.js        # Roster, CSV ingestion, user provisioning
+│   │   ├── auth.js         # Login, signup, OTP, current user profile
+│   │   ├── department.js   # Department officer queue and approvals
+│   │   ├── hod.js          # HoD review queue, audit, and decision
+│   │   ├── registrar.js    # Refund verification and disbursement
+│   │   ├── student.js      # Clearance initiation, bank details, resubmit
+│   │   └── verify.js       # Public certificate verification
+│   ├── auth/               # Authentication contexts & route guards
+│   │   ├── AuthContext.jsx # Global auth state, session storage, permissions
+│   │   └── ProtectedRoute.jsx # Role-based route guard & redirect logic
+│   ├── components/         # Reusable UI components & patterns
+│   │   ├── ui/             # Radix UI primitives styled with Tailwind CSS
+│   │   ├── AppShell.jsx    # Sticky navigation, role indicators, logout alert
+│   │   ├── DataTable.jsx   # TanStack Table v9 wrapper with search & pagination
+│   │   ├── EmptyState.jsx  # Consistent empty state presentation
+│   │   ├── ErrorBoundary.jsx # Global React error boundary with diagnostic display
+│   │   ├── StatusBadge.jsx # Color-coded status pills with Lucide icons
+│   │   └── StepTimeline.jsx # Visual multi-step clearance progress indicator
+│   ├── hooks/              # Custom React hooks
+│   │   └── useDocumentTitle.js # View-specific document title updater
+│   ├── lib/                # Shared utilities and configurations
+│   │   ├── axios.js        # Axios instance with 401 session-expired interceptor
+│   │   ├── departments.js  # SVSU department hierarchy and metadata
+│   │   └── utils.js        # Class name merge utilities (clsx + twMerge)
+│   ├── pages/              # View layer organized by user role
+│   │   ├── admin/          # Admin dashboard, roster, CSV upload, staff
+│   │   ├── hod/            # HoD queue and audit detail review
+│   │   ├── officer/        # Department clearance queue
+│   │   ├── public/         # Landing, Login, Signup, Verify, 404, 403
+│   │   ├── registrar/      # Security deposit refunds
+│   │   └── student/        # Student dashboard, timeline, bank modal
+│   ├── App.jsx             # Router and React Query Provider tree
+│   ├── main.jsx            # Application bootstrap with typography styles
+│   └── index.css           # Tailwind base styles and Minimalist White tokens
+├── jsconfig.json           # Path alias configuration (@ -> ./src)
+├── tailwind.config.js      # Custom theme colors, typography, borders
+├── vite.config.js          # Vite configuration with React and path resolution
+└── package.json            # Dependencies and scripts
+```
+
+---
+
+## 6. Design System & Accessibility
+
+- **Theme**: "Premium Minimalist White" — crisp pure white backgrounds (`#FFFFFF`), subtle zinc borders (`#E4E4E7`), high-contrast black typography (`#09090B`), and minimal accents.
+- **Typography**: Syne for headings (`font-heading`) and Inter for body text (`font-sans`).
+- **Motion & Performance**:
+  - Landing page features smooth momentum scrolling via Lenis and GSAP animations.
+  - Lenis and GSAP are **dynamically imported** exclusively on the landing route to avoid bundle bloat on dashboard routes.
+  - Respects user accessibility preferences (`prefers-reduced-motion: reduce`).
+- **Accessibility**: ARIA labels, semantic landmark elements, keyboard navigation, Radix UI dialog focus trapping, and WCAG AA contrast compliance.
+- **Session Lifecycle**: 401 response interceptor automatically purges expired tokens and smoothly routes back to `/login` with an informational toast.

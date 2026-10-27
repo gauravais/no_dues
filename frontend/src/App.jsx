@@ -1,122 +1,113 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AuthProvider } from '@/auth/AuthContext'
+import { ProtectedRoute } from '@/auth/ProtectedRoute'
+import { Toaster } from '@/components/ui/sonner'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 
-function App() {
-  const [count, setCount] = useState(0)
+// Pages
+import LandingPage from '@/pages/public/LandingPage'
+import LoginPage from '@/pages/public/LoginPage'
+import SignupPage from '@/pages/public/SignupPage'
+import VerifyPage from '@/pages/public/VerifyPage'
+import NotFoundPage from '@/pages/public/NotFoundPage'
+import ForbiddenPage from '@/pages/public/ForbiddenPage'
 
+// Protected Dashboard Views
+import StudentDashboard from '@/pages/student/StudentDashboard'
+import OfficerQueuePage from '@/pages/officer/OfficerQueuePage'
+import HodQueuePage from '@/pages/hod/HodQueuePage'
+import HodRequestDetailPage from '@/pages/hod/HodRequestDetailPage'
+import RegistrarRefundPage from '@/pages/registrar/RegistrarRefundPage'
+import AdminDashboardPage from '@/pages/admin/AdminDashboardPage'
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+})
+
+export default function App() {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <ErrorBoundary>
+          <BrowserRouter>
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/" element={<LandingPage />} />
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/signup" element={<SignupPage />} />
+              <Route path="/verify" element={<VerifyPage />} />
+              <Route path="/verify/:code" element={<VerifyPage />} />
 
-      <div className="ticks"></div>
+              {/* Role-Protected Routes */}
+              <Route
+                path="/student"
+                element={
+                  <ProtectedRoute allowedRoles={['student']}>
+                    <StudentDashboard />
+                  </ProtectedRoute>
+                }
+              />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+              <Route
+                path="/officer"
+                element={
+                  <ProtectedRoute allowedRoles={['dept_officer']}>
+                    <OfficerQueuePage />
+                  </ProtectedRoute>
+                }
+              />
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+              <Route
+                path="/hod"
+                element={
+                  <ProtectedRoute allowedRoles={['hod']}>
+                    <HodQueuePage />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/hod/requests/:id"
+                element={
+                  <ProtectedRoute allowedRoles={['hod']}>
+                    <HodRequestDetailPage />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/registrar"
+                element={
+                  <ProtectedRoute allowedRoles={['registrar_accounts']}>
+                    <RegistrarRefundPage />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/admin"
+                element={
+                  <ProtectedRoute allowedRoles={['admin']}>
+                    <AdminDashboardPage />
+                  </ProtectedRoute>
+                }
+              />
+
+              {/* Error Pages */}
+              <Route path="/forbidden" element={<ForbiddenPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Routes>
+          </BrowserRouter>
+        </ErrorBoundary>
+        {/* Mount Sonner Toaster once at root */}
+        <Toaster position="top-right" richColors closeButton />
+      </AuthProvider>
+    </QueryClientProvider>
   )
 }
-
-export default App

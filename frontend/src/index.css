@@ -1,3 +1,93 @@
+@import "tw-animate-css";
+@import "@fontsource-variable/geist";
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --font-heading: 'Syne', sans-serif;
+    --font-sans: 'Inter', sans-serif;
+
+    /* Base Palette: Pure Minimalist White */
+    --background: 0 0% 100%;           /* #ffffff */
+    --foreground: 240 10% 3.9%;        /* #09090b */
+    --card: 0 0% 100%;                 /* #ffffff */
+    --card-foreground: 240 10% 3.9%;   /* #09090b */
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 10% 3.9%;
+
+    /* Primary: Solid Black fill with White text */
+    --primary: 0 0% 0%;                /* #000000 */
+    --primary-foreground: 0 0% 100%;   /* #ffffff */
+
+    /* Secondary & Muted */
+    --secondary: 240 4.8% 95.9%;       /* #f4f4f5 */
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;           /* #f4f4f5 */
+    --muted-foreground: 240 3.8% 46.1%;/* #71717a */
+
+    /* Restrained Accent: Deep Indigo / Cobalt for key CTAs and highlights */
+    --brand: 221 83% 53%;              /* #2563eb */
+    --brand-foreground: 0 0% 100%;
+    --brand-subtle: 214 95% 93%;       /* #dbeafe */
+
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+
+    /* Semantic Status */
+    --destructive: 0 84.2% 60.2%;      /* #ef4444 */
+    --destructive-foreground: 0 0% 100%;
+
+    /* Borders & Rings */
+    --border: 220 13% 91%;             /* #e5e7eb */
+    --input: 220 13% 91%;              /* #e5e7eb */
+    --ring: 240 5.9% 10%;              /* #18181b */
+    --radius: 0.625rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+  }
+  
+  /* Fallback visibility for text reveal elements */
+  .reveal-text {
+    opacity: 1;
+  }
+}
+
+@keyframes marquee {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marquee 30s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-marquee {
+    animation: none !important;
+    overflow-x: auto;
+  }
+  .reveal-text {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}

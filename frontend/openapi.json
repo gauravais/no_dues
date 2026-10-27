@@ -1,0 +1,3823 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "SVSU No-Dues Clearance API",
+    "description": "\n### University No-Dues Clearance & Security Deposit Refund System\n**Shri Vishwakarma Skill University (SVSU)**\n\nThis backend API replaces the manual paper-based clearance system with an automated digital workflow:\n1. **Parallel Departmental Clearance**: When a student applies for No-Dues clearance, reviews are immediately dispatched in parallel to all applicable university departments:\n   - **ALWAYS**: General service offices (Library, Sports, Account Section, NSS, Dean Student Welfare, etc.)\n   - **HOSTELLER_ONLY**: Hostels (Boys/Girls) for residential students\n   - **ASSIGNED_ONLY**: Specific laboratories and workshops assigned to the student\n   - **OWN_ACADEMIC**: The student's own academic department office\n2. **Selective Resubmission**: If any department rejects with remarks, the request enters `ACTION_NEEDED`. The student resolves the dues/issues and resubmits strictly to that specific department.\n3. **Chairperson / HoD Final Clearance**: Once all departments have approved, the request moves to `HOD_REVIEW`. The Chairperson (HoD) grants final clearance, triggering issuance of an official Certificate with an unguessable UUID code (for verification).\n4. **Post-Clearance Refund**: Verified records transition to Registration & Accounts (`registrar_accounts`) for refund reconciliation.\n\n---\n### Clearance Request Lifecycle Statuses\n- `SUBMITTED`: Active clearance request dispatched to applicable departments; pending reviews.\n- `ACTION_NEEDED`: One or more departments (or the HoD) rejected the request; student action is required.\n- `HOD_REVIEW`: All applicable department clearances are approved; pending final review by the student's Academic Chairperson (HoD).\n- `CLEARED`: HoD has approved; official clearance certificate generated.\n- `REFUND_VERIFIED`: Accounts and Registration have verified the security deposit refund.\n\n---\n### System Roles & Access Matrix\n- **`student`**: Self-registers via OTP; submits clearance application; tracks progress; resubmits to rejected departments or HoD.\n- **`dept_officer`**: Assigned to a specific service or academic department office; approves or rejects student dues for that department with remarks.\n- **`hod`**: Academic Chairperson of the student's department; performs final clearance review and issues certificates.\n- **`registrar_accounts`**: University accounts section for post-clearance security deposit refund processing.\n- **`admin`**: System management and roster administration.\n",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/auth/signup/request-otp": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Request Student Signup OTP",
+        "description": "Initiates student self-registration. Validates that the registration number exists in the student roster, the provided email matches the roster email, the domain is allowed, and that the student has not already created an account. Dispatches a 6-digit OTP.",
+        "operationId": "request_signup_otp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupOTPRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignupOTPResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid registration number, mismatched email, or disallowed domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "User account already exists for this student",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/signup/verify": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Verify OTP and Create Student Account",
+        "description": "Verifies the received OTP, enforces maximum 5 attempts, validates password length (min 8 chars), creates the User record with student role linked to the roster entry, and returns an access token.",
+        "operationId": "verify_signup_otp",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignupVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid, expired, or exceeded attempts OTP, or password too short",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account already created for this registration number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "User Login (OAuth2 Password Grant)",
+        "description": "Authenticates university students, department officers, HoDs, and administrators. Accepts form data where username is the user's email address. Returns a JWT Bearer access token.",
+        "operationId": "login_access_token",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_login_access_token"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Incorrect email or password, or account inactive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Get Current User Profile",
+        "description": "Returns profile details for the authenticated user. If the user is a student, includes their academic roster summary, deposit amount, and securely masked bank account number.",
+        "operationId": "get_my_profile",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserMeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated or invalid token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/student/requests": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Apply for No-Dues Clearance",
+        "description": "Student initiates a clearance application. The system automatically creates parallel clearance reviews for all applicable departments (always-applicable, hosteller if relevant, assigned labs/workshops, and their own academic department) and registers a refund entry. Only one active request is allowed.",
+        "operationId": "create_clearance_request",
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Student profile or roster missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Student already has an active clearance request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/student/requests/current": {
+      "get": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Get Current Clearance Progress",
+        "description": "Returns the active clearance status, progress percentage/ratio, and department-by-department reviews with status, remarks, and resubmission counts.",
+        "operationId": "get_current_request",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentRequestResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No clearance request found for current student",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/student/requests/{request_id}/departments/{department_id}/resubmit": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Resubmit to Rejected Department",
+        "description": "Allows a student to resubmit their clearance only to a department that previously rejected it. The approval status is reset to PENDING and the resubmission count is incremented. Other departments are untouched.",
+        "operationId": "resubmit_department_clearance",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          },
+          {
+            "name": "department_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Department Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentApprovalItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or department approval not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department approval is not currently in REJECTED status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/student/requests/{request_id}/resubmit-to-hod": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Resubmit Clearance to Chairperson / HoD",
+        "description": "When all department approvals are approved but the HoD previously rejected the request with remarks, the student calls this endpoint to clear the HoD remarks and move the request back into HOD_REVIEW.",
+        "operationId": "resubmit_to_hod",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentRequestResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Cannot resubmit to HoD until all department rejections are resolved or no HoD remarks pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/student/bank-details": {
+      "get": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Get Masked Bank Details",
+        "description": "Returns the student's saved bank account details with the account number securely masked (e.g., '********1234') along with IFSC, account holder name, and branch address.",
+        "operationId": "get_student_bank_details",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankDetailRead"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Bank details not found for this student",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Update Bank Details",
+        "description": "Updates or sets the student's bank details for security deposit refunds. Accepts full account number (digits only, length 9 to 18) and standard IFSC code. The full account number is never echoed back.",
+        "operationId": "update_student_bank_details",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BankDetailUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankDetailRead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid bank details or missing roster entry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/student/requests/{request_id}/certificate.pdf": {
+      "get": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Download Official Clearance Certificate (PDF)",
+        "description": "Generates and downloads the official university No-Dues Clearance Certificate in PDF format. Accessible only to the student who owns the request, and only after final clearance (status CLEARED or REFUND_VERIFIED). Includes an authentic QR code linking to the public verification endpoint.",
+        "operationId": "download_clearance_certificate_pdf",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Clearance Certificate in PDF binary format",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/pdf": {}
+            }
+          },
+          "400": {
+            "description": "Request not cleared yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden: not your clearance request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or certificate record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/queue": {
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Get Department Clearance Queue",
+        "description": "Retrieves a paginated list of student clearance requests pending review or previously decided by the officer's assigned department. Returns student identity and programme (never bank details).",
+        "operationId": "get_department_clearance_queue",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ApprovalStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by approval status",
+              "title": "Status"
+            },
+            "description": "Filter by approval status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Page limit",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page limit"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Page offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Page offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentQueueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Officer has no department assigned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-officer roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/approvals/{approval_id}/decision": {
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Submit Department Decision",
+        "description": "Department officer approves or rejects an applicable clearance request. Remarks are strictly mandatory when rejecting. Recomputes the parent request status.",
+        "operationId": "decide_department_approval",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Approval Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentApprovalItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Mandatory remarks missing for rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-officer roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Approval record not found or does not belong to officer's department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Approval record has already been decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hod/queue": {
+      "get": {
+        "tags": [
+          "HoD"
+        ],
+        "summary": "Get HoD Review Queue",
+        "description": "Returns all clearance requests in HOD_REVIEW status for students enrolled under the Chairperson / HoD's academic department.",
+        "operationId": "get_hod_clearance_queue",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/HoDQueueItem"
+                  },
+                  "type": "array",
+                  "title": "Response Get Hod Clearance Queue"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "HoD has no assigned academic department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-HoD roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/hod/requests/{request_id}": {
+      "get": {
+        "tags": [
+          "HoD"
+        ],
+        "summary": "Inspect Clearance Request Details",
+        "description": "Returns the full departmental approval history and student details for an academic clearance request. Accessible only if the student belongs to the HoD's department.",
+        "operationId": "get_hod_request_detail",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoDRequestDetailResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-HoD roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found or belongs to another department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hod/requests/{request_id}/decision": {
+      "post": {
+        "tags": [
+          "HoD"
+        ],
+        "summary": "Submit Chairperson / HoD Final Clearance Decision",
+        "description": "Chairperson / HoD grants final approval or rejection of the clearance application. Approval sets status to CLEARED and generates an official Certificate record. Rejection (with mandatory remarks) sets status to ACTION_NEEDED.",
+        "operationId": "decide_hod_clearance",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoDRequestDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Mandatory remarks missing for rejection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-HoD roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request not found or not in HoD's department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request is not in HOD_REVIEW status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/verify/{certificate_code}": {
+      "get": {
+        "tags": [
+          "Public Verification"
+        ],
+        "summary": "Verify Certificate Authenticity (Public)",
+        "description": "Public endpoint to verify a student's No-Dues clearance certificate using the unique UUID code or scanned QR code. Returns basic academic details and issue timestamp. Protects privacy by strictly masking the registration number and never exposing student names, phone numbers, emails, or financial details.",
+        "operationId": "verify_certificate_public",
+        "parameters": [
+          {
+            "name": "certificate_code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Certificate Code"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicVerificationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/queue": {
+      "get": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Get Cleared Requests for Refund",
+        "description": "Returns a paginated list of clearance requests currently in CLEARED status, awaiting security deposit reconciliation and refund verification by the university accounts branch.",
+        "operationId": "get_registrar_queue",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Page limit",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page limit"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Page offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Page offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrarQueueResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/verify-refund": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Verify Refund Deductions and Approve",
+        "description": "Applies any verified dues/deductions against the initial security deposit. Deductions must satisfy 0 <= deductions <= deposit. Moves the refund status to VERIFIED and request status to REFUND_VERIFIED. Executes atomically with row locking and logs an audit trail.",
+        "operationId": "verify_student_refund",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRefundRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyRefundResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request not in CLEARED status or invalid deduction limits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/mark-processed": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Mark Refund Disbursed / Processed",
+        "description": "Records the bank payment reference (UTR/NEFT) once the refund amount is disbursed to the student's verified bank account. Requires the refund to have been VERIFIED previously.",
+        "operationId": "mark_refund_processed",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkRefundProcessedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarkRefundProcessedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refund not in VERIFIED status yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/roster/upload": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Upload Student Roster CSV",
+        "description": "Uploads a CSV file containing student roster records. Validates each row: non-empty credentials, valid email format, known programme name, valid hosteller flag, and non-negative deposit. Performs an upsert based on registration_number and returns a row-by-row status report. Does NOT create user accounts.",
+        "operationId": "upload_roster_csv",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_roster_csv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CSV file format or headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/roster": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List and Search Student Roster",
+        "description": "Retrieves a paginated list of student roster records with optional search filter.",
+        "operationId": "list_student_roster",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search by registration number, name, or email",
+              "title": "Search"
+            },
+            "description": "Search by registration number, name, or email"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/roster/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Student Roster Profile",
+        "description": "Updates hosteller status, security deposit amount, address, or mobile for a roster record.",
+        "operationId": "update_roster_entry",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RosterUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid update values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roster record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/roster/{id}/assigned-departments": {
+      "put": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Assigned Labs & Workshops",
+        "description": "Replaces assigned laboratory and workshop departments for a student roster profile.",
+        "operationId": "update_roster_assigned_departments",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RosterAssignedDepartmentsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid department ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Roster record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create University Staff User",
+        "description": "Provisions a new staff user (dept_officer, hod, or registrar_accounts). Department is mandatory for officers and HoDs. HoDs must be assigned to an academic department. Automatically generates a secure random temporary password and returns it ONCE in the response (never logged).",
+        "operationId": "create_staff_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid role, missing department, or non-academic HoD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "User with this email already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}/reset-password": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Reset User Password",
+        "description": "Generates a new random temporary password for any user account and returns it once in the response.",
+        "operationId": "reset_user_password_admin",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminResetPasswordResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/active": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Activate or Deactivate User Account",
+        "description": "Enables or disables a user account. Deactivated accounts are refused login immediately. An administrator is prevented from deactivating their own account.",
+        "operationId": "toggle_user_active_status",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUserActiveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Admin cannot deactivate their own account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminCreateUserRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email",
+            "description": "Official university staff email",
+            "examples": [
+              "officer.lab3@example.edu"
+            ]
+          },
+          "full_name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Full Name",
+            "description": "Full name of staff member",
+            "examples": [
+              "Dr. Meenakshi Sharma"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "description": "Allowed staff role: dept_officer, hod, or registrar_accounts",
+            "examples": [
+              "dept_officer"
+            ]
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Id",
+            "description": "Assigned department ID (Mandatory for dept_officer and hod; academic only for hod)",
+            "examples": [
+              4
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "full_name",
+          "role"
+        ],
+        "title": "AdminCreateUserRequest",
+        "description": "Payload for administrator to provision staff, officer or HoD user."
+      },
+      "AdminResetPasswordResponse": {
+        "properties": {
+          "user_id": {
+            "type": "integer",
+            "title": "User Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "temporary_password": {
+            "type": "string",
+            "title": "Temporary Password",
+            "description": "One-time generated random temporary password",
+            "examples": [
+              "wQ7$mN9@xY24"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "temporary_password"
+        ],
+        "title": "AdminResetPasswordResponse",
+        "description": "One-time reset temporary password response."
+      },
+      "AdminUserActiveRequest": {
+        "properties": {
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_active"
+        ],
+        "title": "AdminUserActiveRequest",
+        "description": "Payload to activate or deactivate a user account."
+      },
+      "AdminUserResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Id"
+          },
+          "department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Name"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "temporary_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temporary Password",
+            "description": "One-time generated random temporary password (never returned again and never logged)",
+            "examples": [
+              "k9#dF2!zLp01"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "full_name",
+          "role",
+          "department_id",
+          "is_active"
+        ],
+        "title": "AdminUserResponse",
+        "description": "Created or inspected user record."
+      },
+      "ApprovalStatus": {
+        "type": "string",
+        "enum": [
+          "PENDING",
+          "APPROVED",
+          "REJECTED"
+        ],
+        "title": "ApprovalStatus"
+      },
+      "BankDetailRead": {
+        "properties": {
+          "account_number_masked": {
+            "type": "string",
+            "title": "Account Number Masked",
+            "description": "Securely masked bank account number (all but last 4 digits hidden)",
+            "examples": [
+              "********1234"
+            ]
+          },
+          "ifsc_code": {
+            "type": "string",
+            "title": "Ifsc Code",
+            "description": "11-character Indian Financial System Code",
+            "examples": [
+              "SBIN0001234"
+            ]
+          },
+          "account_holder_name": {
+            "type": "string",
+            "title": "Account Holder Name",
+            "description": "Official account holder name as recorded in the bank",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "bank_address": {
+            "type": "string",
+            "title": "Bank Address",
+            "description": "Bank branch name and location",
+            "examples": [
+              "State Bank of India, Main Campus Branch, Palwal"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_number_masked",
+          "ifsc_code",
+          "account_holder_name",
+          "bank_address"
+        ],
+        "title": "BankDetailRead",
+        "description": "Masked bank details view for a student."
+      },
+      "BankDetailUpdate": {
+        "properties": {
+          "account_number": {
+            "type": "string",
+            "pattern": "^\\d{9,18}$",
+            "title": "Account Number",
+            "description": "Full bank account number (digits only, 9 to 18 digits)",
+            "examples": [
+              "123456789012"
+            ]
+          },
+          "ifsc_code": {
+            "type": "string",
+            "pattern": "^[A-Z]{4}0[A-Z0-9]{6}$",
+            "title": "Ifsc Code",
+            "description": "Standard 11-character IFSC code matching ^[A-Z]{4}0[A-Z0-9]{6}$",
+            "examples": [
+              "SBIN0001234"
+            ]
+          },
+          "account_holder_name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Account Holder Name",
+            "description": "Full name of account holder",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "bank_address": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Bank Address",
+            "description": "Bank branch and address",
+            "examples": [
+              "State Bank of India, Main Campus Branch, Palwal"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_number",
+          "ifsc_code",
+          "account_holder_name",
+          "bank_address"
+        ],
+        "title": "BankDetailUpdate",
+        "description": "Payload to update student bank details."
+      },
+      "Body_login_access_token": {
+        "properties": {
+          "grant_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^password$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Type"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "title": "Password"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope",
+            "default": ""
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "format": "password",
+            "title": "Client Secret"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "Body_login_access_token"
+      },
+      "Body_upload_roster_csv": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "CSV file with student roster records"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_roster_csv"
+      },
+      "ClearanceStatus": {
+        "type": "string",
+        "enum": [
+          "SUBMITTED",
+          "ACTION_NEEDED",
+          "HOD_REVIEW",
+          "CLEARED",
+          "REFUND_VERIFIED"
+        ],
+        "title": "ClearanceStatus"
+      },
+      "CurrentRequestResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClearanceStatus",
+            "description": "Overall clearance lifecycle status",
+            "examples": [
+              "SUBMITTED"
+            ]
+          },
+          "progress": {
+            "type": "string",
+            "title": "Progress",
+            "description": "Progress indicator of approved departments",
+            "examples": [
+              "8 of 12 approved"
+            ]
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Submitted At",
+            "description": "Timestamp of initial submission"
+          },
+          "hod_remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hod Remarks",
+            "description": "Chairperson / HoD remarks (if rejected during HOD review)",
+            "examples": [
+              "Subject project submission verification pending"
+            ]
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentApprovalItem"
+            },
+            "type": "array",
+            "title": "Approvals",
+            "description": "List of all department clearance reviews"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "progress",
+          "submitted_at",
+          "approvals"
+        ],
+        "title": "CurrentRequestResponse",
+        "description": "Status summary and department-by-department breakdown of a clearance request."
+      },
+      "DecisionRequest": {
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ApprovalStatus",
+            "description": "Approval decision: APPROVED or REJECTED",
+            "examples": [
+              "APPROVED"
+            ]
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks",
+            "description": "Remarks explaining the decision (MANDATORY if decision is REJECTED)",
+            "examples": [
+              "All lab instruments returned and verified."
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "DecisionRequest",
+        "description": "Payload submitted by a department officer or HoD to record a decision."
+      },
+      "DepartmentApprovalItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "Approval record ID",
+            "examples": [
+              101
+            ]
+          },
+          "department_id": {
+            "type": "integer",
+            "title": "Department Id",
+            "description": "Department ID",
+            "examples": [
+              1
+            ]
+          },
+          "department_name": {
+            "type": "string",
+            "title": "Department Name",
+            "description": "Department title",
+            "examples": [
+              "Library"
+            ]
+          },
+          "department_kind": {
+            "type": "string",
+            "title": "Department Kind",
+            "description": "Department category: academic or service",
+            "examples": [
+              "service"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus",
+            "description": "Current approval status",
+            "examples": [
+              "PENDING"
+            ]
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks",
+            "description": "Department officer remarks (mandatory on rejection)",
+            "examples": [
+              "Fine pending: Rs. 150"
+            ]
+          },
+          "previous_remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Remarks",
+            "description": "Previous rejection reason before student resubmitted",
+            "examples": [
+              "Fine pending: Rs. 150"
+            ]
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At",
+            "description": "Timestamp when decision was rendered"
+          },
+          "resubmission_count": {
+            "type": "integer",
+            "title": "Resubmission Count",
+            "description": "Number of times student resubmitted to this department",
+            "examples": [
+              0
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "department_id",
+          "department_name",
+          "department_kind",
+          "status",
+          "resubmission_count"
+        ],
+        "title": "DepartmentApprovalItem",
+        "description": "Detailed approval status for an applicable university department."
+      },
+      "DepartmentQueueItem": {
+        "properties": {
+          "approval_id": {
+            "type": "integer",
+            "title": "Approval Id",
+            "description": "Approval row ID",
+            "examples": [
+              10
+            ]
+          },
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Parent clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "student_name": {
+            "type": "string",
+            "title": "Student Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "DEMO2026001"
+            ]
+          },
+          "programme_name": {
+            "type": "string",
+            "title": "Programme Name",
+            "description": "Student enrolled programme",
+            "examples": [
+              "Bachelor of Technology (B.Tech.) Computer Engineering"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus",
+            "description": "Approval status",
+            "examples": [
+              "PENDING"
+            ]
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Submitted At",
+            "description": "Request submission timestamp"
+          },
+          "resubmission_count": {
+            "type": "integer",
+            "title": "Resubmission Count",
+            "description": "Number of resubmissions",
+            "examples": [
+              0
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "approval_id",
+          "request_id",
+          "student_name",
+          "registration_number",
+          "programme_name",
+          "status",
+          "submitted_at",
+          "resubmission_count"
+        ],
+        "title": "DepartmentQueueItem",
+        "description": "Queue entry for department officers reviewing clearances."
+      },
+      "DepartmentQueueResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentQueueItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "Pending or reviewed clearances for this department"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total records matching query filter",
+            "examples": [
+              1
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Page size limit",
+            "examples": [
+              50
+            ]
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "Page offset",
+            "examples": [
+              0
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "DepartmentQueueResponse",
+        "description": "Paginated list of department clearance queue items."
+      },
+      "ErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Human-readable explanation of the error",
+            "examples": [
+              "Resource not found"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorResponse",
+        "description": "Standard API error payload."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HoDQueueItem": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "student_name": {
+            "type": "string",
+            "title": "Student Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "DEMO2026001"
+            ]
+          },
+          "programme_name": {
+            "type": "string",
+            "title": "Programme Name",
+            "description": "Enrolled academic course",
+            "examples": [
+              "Bachelor of Technology (B.Tech.) Computer Engineering"
+            ]
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Submitted At",
+            "description": "Initial submission timestamp"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClearanceStatus",
+            "description": "Request status (should be HOD_REVIEW)",
+            "examples": [
+              "HOD_REVIEW"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "student_name",
+          "registration_number",
+          "programme_name",
+          "submitted_at",
+          "status"
+        ],
+        "title": "HoDQueueItem",
+        "description": "Queue entry for Chairperson / HoD reviewing completed departmental clearances."
+      },
+      "HoDRequestDetailResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClearanceStatus",
+            "description": "Overall clearance lifecycle status",
+            "examples": [
+              "HOD_REVIEW"
+            ]
+          },
+          "student_name": {
+            "type": "string",
+            "title": "Student Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "DEMO2026001"
+            ]
+          },
+          "programme_name": {
+            "type": "string",
+            "title": "Programme Name",
+            "description": "Enrolled course",
+            "examples": [
+              "Bachelor of Technology (B.Tech.) Computer Engineering"
+            ]
+          },
+          "is_hosteller": {
+            "type": "boolean",
+            "title": "Is Hosteller",
+            "description": "Hosteller status",
+            "examples": [
+              true
+            ]
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Submitted At",
+            "description": "Initial submission timestamp"
+          },
+          "hod_remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hod Remarks",
+            "description": "Previous HoD rejection remarks if any"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentApprovalItem"
+            },
+            "type": "array",
+            "title": "Approvals",
+            "description": "Full table of all departmental clearance decisions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "status",
+          "student_name",
+          "registration_number",
+          "programme_name",
+          "is_hosteller",
+          "submitted_at",
+          "approvals"
+        ],
+        "title": "HoDRequestDetailResponse",
+        "description": "Full detail view for HoD review of a student clearance request."
+      },
+      "MarkRefundProcessedRequest": {
+        "properties": {
+          "payment_reference": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Payment Reference",
+            "description": "Official bank payment / UTR / NEFT reference number",
+            "examples": [
+              "UTR20261026009847"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "payment_reference"
+        ],
+        "title": "MarkRefundProcessedRequest",
+        "description": "Payload to record bank transaction reference for disbursed refund."
+      },
+      "MarkRefundProcessedResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "payment_reference": {
+            "type": "string",
+            "title": "Payment Reference",
+            "description": "Recorded payment reference",
+            "examples": [
+              "UTR20261026009847"
+            ]
+          },
+          "refund_status": {
+            "type": "string",
+            "title": "Refund Status",
+            "description": "Updated refund status",
+            "examples": [
+              "PROCESSED"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At",
+            "description": "Timestamp of completion"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "payment_reference",
+          "refund_status",
+          "updated_at"
+        ],
+        "title": "MarkRefundProcessedResponse",
+        "description": "Response after marking refund as processed."
+      },
+      "PublicVerificationResponse": {
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "title": "Valid",
+            "description": "Whether the certificate is authentic and registered in the university system",
+            "examples": [
+              true
+            ]
+          },
+          "issued_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issued At",
+            "description": "Date and time when the certificate was issued by the HoD",
+            "examples": [
+              "2026-10-26T12:00:00Z"
+            ]
+          },
+          "masked_registration_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masked Registration Number",
+            "description": "Masked registration number protecting student identity (all but last 4 digits masked)",
+            "examples": [
+              "*******2001"
+            ]
+          },
+          "programme": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Programme",
+            "description": "Degree / Diploma programme completed",
+            "examples": [
+              "Bachelor of Technology (B.Tech.) Computer Engineering"
+            ]
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department",
+            "description": "Academic department name",
+            "examples": [
+              "Skill Department of CS/IT"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "valid"
+        ],
+        "title": "PublicVerificationResponse",
+        "description": "Public certificate verification result."
+      },
+      "RegistrarQueueItem": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Unique clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "student_name": {
+            "type": "string",
+            "title": "Student Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "DEMO2026001"
+            ]
+          },
+          "programme": {
+            "type": "string",
+            "title": "Programme",
+            "description": "Enrolled degree programme",
+            "examples": [
+              "B.Tech Computer Engineering"
+            ]
+          },
+          "deposit_amount": {
+            "type": "string",
+            "title": "Deposit Amount",
+            "description": "Security deposit deposited initially",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "cleared_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared At",
+            "description": "Date cleared by HoD"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Clearance request status",
+            "examples": [
+              "CLEARED"
+            ]
+          },
+          "refund_status": {
+            "type": "string",
+            "title": "Refund Status",
+            "description": "Refund record status",
+            "examples": [
+              "PENDING_VERIFICATION"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "student_name",
+          "registration_number",
+          "programme",
+          "deposit_amount",
+          "status",
+          "refund_status"
+        ],
+        "title": "RegistrarQueueItem",
+        "description": "Clearance record waiting for refund processing."
+      },
+      "RegistrarQueueResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total count of eligible requests",
+            "examples": [
+              1
+            ]
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RegistrarQueueItem"
+            },
+            "type": "array",
+            "title": "Items",
+            "description": "Batch of items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "RegistrarQueueResponse",
+        "description": "Paginated list of clearance requests pending refund processing."
+      },
+      "RosterAssignedDepartmentsRequest": {
+        "properties": {
+          "department_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Department Ids",
+            "description": "List of assigned service department IDs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "department_ids"
+        ],
+        "title": "RosterAssignedDepartmentsRequest",
+        "description": "Payload to set assigned labs/workshops for a student."
+      },
+      "RosterItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "mobile": {
+            "type": "string",
+            "title": "Mobile"
+          },
+          "address": {
+            "type": "string",
+            "title": "Address"
+          },
+          "programme_id": {
+            "type": "integer",
+            "title": "Programme Id"
+          },
+          "programme_name": {
+            "type": "string",
+            "title": "Programme Name"
+          },
+          "is_hosteller": {
+            "type": "boolean",
+            "title": "Is Hosteller"
+          },
+          "security_deposit_amount": {
+            "type": "string",
+            "title": "Security Deposit Amount"
+          },
+          "assigned_department_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Assigned Department Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "registration_number",
+          "name",
+          "email",
+          "mobile",
+          "address",
+          "programme_id",
+          "programme_name",
+          "is_hosteller",
+          "security_deposit_amount"
+        ],
+        "title": "RosterItem",
+        "description": "Student roster entry."
+      },
+      "RosterListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RosterItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "RosterListResponse",
+        "description": "Paginated roster list."
+      },
+      "RosterSummary": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Registration number",
+            "examples": [
+              "DEMO2026001"
+            ]
+          },
+          "programme": {
+            "type": "string",
+            "title": "Programme",
+            "description": "Enrolled programme name",
+            "examples": [
+              "Bachelor of Technology (B.Tech.) Computer Engineering"
+            ]
+          },
+          "department": {
+            "type": "string",
+            "title": "Department",
+            "description": "Enrolled academic department name",
+            "examples": [
+              "Skill Department of CS/IT"
+            ]
+          },
+          "is_hosteller": {
+            "type": "boolean",
+            "title": "Is Hosteller",
+            "description": "Whether student resides in campus hostel",
+            "examples": [
+              true
+            ]
+          },
+          "security_deposit_amount": {
+            "type": "string",
+            "title": "Security Deposit Amount",
+            "description": "Eligible security deposit amount for no-dues clearance refund",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "masked_bank_account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Masked Bank Account",
+            "description": "Masked bank account number for refund credit (last 4 digits visible)",
+            "examples": [
+              "********0001"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "registration_number",
+          "programme",
+          "department",
+          "is_hosteller",
+          "security_deposit_amount"
+        ],
+        "title": "RosterSummary",
+        "description": "Academic and financial roster profile summary for a student."
+      },
+      "RosterUpdateRequest": {
+        "properties": {
+          "is_hosteller": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Hosteller"
+          },
+          "security_deposit_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Deposit Amount"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          },
+          "mobile": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile"
+          }
+        },
+        "type": "object",
+        "title": "RosterUpdateRequest",
+        "description": "Payload to patch a student roster record."
+      },
+      "RosterUploadResponse": {
+        "properties": {
+          "total_rows": {
+            "type": "integer",
+            "title": "Total Rows"
+          },
+          "created_count": {
+            "type": "integer",
+            "title": "Created Count"
+          },
+          "updated_count": {
+            "type": "integer",
+            "title": "Updated Count"
+          },
+          "rejected_count": {
+            "type": "integer",
+            "title": "Rejected Count"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/RosterUploadRowReport"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_rows",
+          "created_count",
+          "updated_count",
+          "rejected_count",
+          "rows"
+        ],
+        "title": "RosterUploadResponse",
+        "description": "Aggregate upload summary report."
+      },
+      "RosterUploadRowReport": {
+        "properties": {
+          "row_number": {
+            "type": "integer",
+            "title": "Row Number"
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "created | updated | rejected"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row_number",
+          "registration_number",
+          "status"
+        ],
+        "title": "RosterUploadRowReport",
+        "description": "Result per processed CSV row."
+      },
+      "SignupOTPRequest": {
+        "properties": {
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Official student registration number as listed on university roster",
+            "examples": [
+              "DEMO2026006"
+            ]
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email",
+            "description": "Official university email corresponding to the registration number",
+            "examples": [
+              "aman.gupta@example.edu"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "registration_number",
+          "email"
+        ],
+        "title": "SignupOTPRequest",
+        "description": "Payload to request a verification OTP for student self-registration."
+      },
+      "SignupOTPResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Status description regarding dispatch of the OTP",
+            "examples": [
+              "If the details match our records, an OTP has been dispatched to your email."
+            ]
+          },
+          "dev_otp": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dev Otp",
+            "description": "Included only in development mode when DEV_RETURN_OTP=true",
+            "examples": [
+              "123456"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "SignupOTPResponse",
+        "description": "Response returned upon requesting a signup OTP."
+      },
+      "SignupVerifyRequest": {
+        "properties": {
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Official student registration number",
+            "examples": [
+              "DEMO2026006"
+            ]
+          },
+          "otp": {
+            "type": "string",
+            "maxLength": 6,
+            "minLength": 6,
+            "title": "Otp",
+            "description": "6-digit numeric OTP sent to your registered email",
+            "examples": [
+              "123456"
+            ]
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "title": "Password",
+            "description": "New password (minimum 8 characters)",
+            "examples": [
+              "StudentSecure@2026"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "registration_number",
+          "otp",
+          "password"
+        ],
+        "title": "SignupVerifyRequest",
+        "description": "Payload to verify OTP and establish student account password."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token",
+            "description": "JWT Bearer token for authorized requests"
+          },
+          "token_type": {
+            "type": "string",
+            "title": "Token Type",
+            "description": "Token type standard",
+            "default": "bearer",
+            "examples": [
+              "bearer"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token"
+        ],
+        "title": "TokenResponse",
+        "description": "OAuth2 Bearer token response."
+      },
+      "UserMeResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "User unique database ID",
+            "examples": [
+              1
+            ]
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email",
+            "description": "User login email address",
+            "examples": [
+              "arjun.mehta@example.edu"
+            ]
+          },
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name",
+            "description": "User full display name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "System role identifier",
+            "examples": [
+              "student"
+            ]
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Id",
+            "description": "Assigned department ID (for staff and HoD)",
+            "examples": [
+              4
+            ]
+          },
+          "department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Name",
+            "description": "Assigned department title",
+            "examples": [
+              "Skill Department of CS/IT"
+            ]
+          },
+          "roster": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RosterSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Detailed roster info if user role is student"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role"
+        ],
+        "title": "UserMeResponse",
+        "description": "Current authenticated user profile."
+      },
+      "UserRole": {
+        "type": "string",
+        "enum": [
+          "student",
+          "dept_officer",
+          "hod",
+          "registrar_accounts",
+          "admin"
+        ],
+        "title": "UserRole"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VerifyRefundRequest": {
+        "properties": {
+          "deductions": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Deductions",
+            "description": "Amount to deduct from deposit (must be between 0 and deposit amount)",
+            "examples": [
+              "250.00"
+            ]
+          },
+          "remarks": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remarks",
+            "description": "Justification or breakdown for deductions",
+            "examples": [
+              "Hostel damage deduction Rs. 250"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "deductions"
+        ],
+        "title": "VerifyRefundRequest",
+        "description": "Payload to verify and compute refund deductions."
+      },
+      "VerifyRefundResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "deposit_amount": {
+            "type": "string",
+            "title": "Deposit Amount",
+            "description": "Original deposit amount",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "deductions": {
+            "type": "string",
+            "title": "Deductions",
+            "description": "Approved deductions",
+            "examples": [
+              "250.00"
+            ]
+          },
+          "final_amount": {
+            "type": "string",
+            "title": "Final Amount",
+            "description": "Calculated final refund amount",
+            "examples": [
+              "4750.00"
+            ]
+          },
+          "refund_status": {
+            "type": "string",
+            "title": "Refund Status",
+            "description": "New refund status",
+            "examples": [
+              "VERIFIED"
+            ]
+          },
+          "request_status": {
+            "type": "string",
+            "title": "Request Status",
+            "description": "New request status",
+            "examples": [
+              "REFUND_VERIFIED"
+            ]
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At",
+            "description": "Timestamp of verification"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "deposit_amount",
+          "deductions",
+          "final_amount",
+          "refund_status",
+          "request_status",
+          "updated_at"
+        ],
+        "title": "VerifyRefundResponse",
+        "description": "Response after verifying refund calculation."
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "description": "Provide access token as: Bearer <token>",
+        "flows": {
+          "password": {
+            "scopes": {},
+            "tokenUrl": "/auth/login"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "Student self-registration via official roster OTP, OAuth2 password login, and profile inspection."
+    },
+    {
+      "name": "Student",
+      "description": "Student clearance lifecycle: application submission, live progress tracking, and resubmissions."
+    },
+    {
+      "name": "Department Officer",
+      "description": "Review and decision workflow for departmental officers (Library, Hostel, Labs, Workshops, etc.)."
+    },
+    {
+      "name": "HoD",
+      "description": "Final review, clearance certification, and remarks by Academic Department Chairpersons (HoD)."
+    },
+    {
+      "name": "Public Verification",
+      "description": "Public certificate verification by UUID code or QR code link (no authentication required)."
+    },
+    {
+      "name": "Registrar / Accounts",
+      "description": "Post-clearance security deposit reconciliation, deductions, and payment reference recording."
+    },
+    {
+      "name": "Admin",
+      "description": "Administrative roster CSV upload, student profile edits, staff user creation, and access management."
+    }
+  ]
+}
