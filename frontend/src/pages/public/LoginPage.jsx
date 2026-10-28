@@ -21,16 +21,18 @@ import {
   ChevronDown,
 } from 'lucide-react'
 
-const DEMO_ACCOUNTS = [
-  { role: 'Student (Day Scholar)', email: 'aarav.sharma@example.edu', desc: 'B.Tech CE' },
-  { role: 'Student (Hosteller)', email: 'priya.sharma@example.edu', desc: 'B.Tech CSE' },
-  { role: 'Student (Verified Demo)', email: 'aman.gupta@example.edu', desc: 'DEMO2026006' },
-  { role: 'Chairperson CS/IT', email: 'hod.csit@example.edu', desc: 'HoD' },
-  { role: 'Library Officer', email: 'library.officer@example.edu', desc: 'Officer' },
-  { role: 'Hostel Warden', email: 'hostel.warden@example.edu', desc: 'Hostel' },
-  { role: 'Accounts / Registrar', email: 'registrar.accounts@example.edu', desc: 'Refunds' },
-  { role: 'Administrator', email: 'admin@example.edu', desc: 'System Admin' },
-]
+const DEMO_ACCOUNTS = import.meta.env.DEV
+  ? [
+      { role: 'Student (Day Scholar)', email: 'arjun.mehta@example.edu', desc: 'DEMO2026001' },
+      { role: 'Student (Hosteller)', email: 'priya.sharma@example.edu', desc: 'DEMO2026002' },
+      { role: 'Student (Unregistered)', email: 'aman.gupta@example.edu', desc: 'Sign-up OTP Demo' },
+      { role: 'Chairperson CS/IT', email: 'hod.csit@example.edu', desc: 'HoD' },
+      { role: 'Library Officer', email: 'library.officer@example.edu', desc: 'Officer' },
+      { role: 'Hostel Warden', email: 'hostel.warden@example.edu', desc: 'Hostel' },
+      { role: 'Accounts / Registrar', email: 'registrar.accounts@example.edu', desc: 'Refunds' },
+      { role: 'Administrator', email: 'admin@example.edu', desc: 'System Admin' },
+    ]
+  : []
 
 export function LoginPage() {
   useDocumentTitle('Sign In')
@@ -43,6 +45,7 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errors, setErrors] = useState({})
+  const [apiError, setApiError] = useState('')
 
   const from = location.state?.from?.pathname || null
 
@@ -64,11 +67,13 @@ export function LoginPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    setApiError('')
     if (!validate()) return
 
     setLoading(true)
+    const normalizedEmail = email.trim().toLowerCase()
     try {
-      const data = await authApi.login(email.trim(), password)
+      const data = await authApi.login(normalizedEmail, password)
       login(data.access_token)
       toast.success('Signed in successfully!')
 
@@ -101,6 +106,7 @@ export function LoginPage() {
     } catch (err) {
       const msg = err.response?.data?.detail || 'Invalid email or password. Please try again.'
       toast.error(msg)
+      setApiError(msg)
     } finally {
       setLoading(false)
     }
@@ -109,6 +115,7 @@ export function LoginPage() {
   const handleQuickFill = (demoEmail) => {
     setEmail(demoEmail)
     setErrors((prev) => ({ ...prev, email: undefined }))
+    setApiError('')
     toast.info(`Filled email: ${demoEmail}`)
   }
 
@@ -199,7 +206,7 @@ export function LoginPage() {
                     <Input
                       id="email"
                       type="email"
-                      placeholder="student@example.edu"
+                      placeholder="student@svsu.ac.in"
                       className={`pl-9 text-sm ${errors.email ? 'border-destructive ring-1 ring-destructive' : ''}`}
                       value={email}
                       onChange={(e) => {
@@ -213,6 +220,9 @@ export function LoginPage() {
                   {errors.email && (
                     <p className="text-[11px] text-destructive font-medium mt-0.5">{errors.email}</p>
                   )}
+                  <p className="text-[11px] text-zinc-500">
+                    Use your university email. Students: &lt;registration number&gt;@svsu.ac.in. Staff: &lt;name&gt;@svsu.ac.in
+                  </p>
                 </div>
 
                 {/* Password Field */}
@@ -252,6 +262,13 @@ export function LoginPage() {
                   )}
                 </div>
 
+                {/* API Error Display */}
+                {apiError && (
+                  <div className="p-3 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md font-medium">
+                    {apiError}
+                  </div>
+                )}
+
                 {/* Submit Action */}
                 <Button
                   type="submit"
@@ -275,34 +292,36 @@ export function LoginPage() {
           </Card>
 
           {/* Collapsible Demo Accounts (Development Only) */}
-          <details className="group rounded-xl border border-zinc-200 bg-white p-4 text-xs transition-all shadow-2xs">
-            <summary className="flex items-center justify-between cursor-pointer list-none font-semibold text-zinc-800 select-none">
-              <span className="flex items-center gap-2">
-                <Sparkles className="w-3.5 h-3.5 text-zinc-600" />
-                <span>Demo accounts (development only)</span>
-              </span>
-              <ChevronDown className="w-4 h-4 text-zinc-400 transition-transform duration-200 group-open:rotate-180" />
-            </summary>
+          {import.meta.env.DEV && (
+            <details className="group rounded-xl border border-zinc-200 bg-white p-4 text-xs transition-all shadow-2xs">
+              <summary className="flex items-center justify-between cursor-pointer list-none font-semibold text-zinc-800 select-none">
+                <span className="flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-zinc-600" />
+                  <span>Demo accounts (development only)</span>
+                </span>
+                <ChevronDown className="w-4 h-4 text-zinc-400 transition-transform duration-200 group-open:rotate-180" />
+              </summary>
 
-            <div className="pt-3 space-y-2 border-t border-zinc-100 mt-3">
-              <p className="text-[11px] text-zinc-500">
-                Click any role to pre-fill their official demo email (seeded password: <code className="font-mono text-zinc-800 font-semibold">SeedPass@123</code>):
-              </p>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {DEMO_ACCOUNTS.map((acc) => (
-                  <button
-                    key={acc.email}
-                    type="button"
-                    onClick={() => handleQuickFill(acc.email)}
-                    className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-zinc-50 border border-zinc-200 hover:border-black hover:bg-zinc-100 text-zinc-800 transition-colors"
-                  >
-                    <span className="font-semibold">{acc.role}</span>
-                    <span className="text-zinc-400 font-mono text-[10px]">({acc.desc})</span>
-                  </button>
-                ))}
+              <div className="pt-3 space-y-2 border-t border-zinc-100 mt-3">
+                <p className="text-[11px] text-zinc-500">
+                  Click any role to pre-fill their official demo email (seeded password: <code className="font-mono text-zinc-800 font-semibold">SeedPass@123</code>):
+                </p>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {DEMO_ACCOUNTS.map((acc) => (
+                    <button
+                      key={acc.email}
+                      type="button"
+                      onClick={() => handleQuickFill(acc.email)}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-zinc-50 border border-zinc-200 hover:border-black hover:bg-zinc-100 text-zinc-800 transition-colors"
+                    >
+                      <span className="font-semibold">{acc.role}</span>
+                      <span className="text-zinc-400 font-mono text-[10px]">({acc.desc})</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          </details>
+            </details>
+          )}
         </div>
       </div>
     </div>

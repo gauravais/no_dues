@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Dialog,
   DialogContent,
@@ -27,12 +28,14 @@ import {
   CreditCard,
   Receipt,
   FileCheck2,
+  AlertCircle,
 } from 'lucide-react'
 
 export function RegistrarRefundPage() {
   useDocumentTitle('Refunds & Disbursements')
   const { user } = useAuth()
 
+  const [activeTab, setActiveTab] = useState('CLEARED')
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(25)
   const [searchTerm, setSearchTerm] = useState('')
@@ -54,16 +57,19 @@ export function RegistrarRefundPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [verifiedResult, setVerifiedResult] = useState(null)
 
-  // Fetch Cleared Requests Queue
+  // Fetch Requests Queue based on active tab
   const {
     data: queueResponse,
     isLoading,
+    isError,
+    error,
     isRefetching,
     refetch,
   } = useQuery({
-    queryKey: ['registrar', 'queue', pageIndex, pageSize],
+    queryKey: ['registrar', 'queue', activeTab, pageIndex, pageSize],
     queryFn: async () => {
       return await registrarApi.getQueue({
+        status: activeTab,
         limit: pageSize,
         offset: pageIndex * pageSize,
       })
@@ -85,15 +91,23 @@ export function RegistrarRefundPage() {
     )
   }, [rawItems, searchTerm])
 
-  const openRefundModal = (req) => {
+  const openRefundModal = (req, step = 1) => {
     setSelectedRequest(req)
-    setActiveStep(1)
-    setDeductions('0')
+    setActiveStep(step)
+    const existingDeductions = req.deductions != null ? String(req.deductions) : '0'
+    setDeductions(existingDeductions)
     setRemarks('')
     setDeductionsError('')
     setPaymentRef('')
     setPaymentRefError('')
-    setVerifiedResult(null)
+    setVerifiedResult(
+      req.final_amount != null
+        ? {
+            final_amount: Number(req.final_amount),
+            deductions: Number(req.deductions || 0),
+          }
+        : null
+    )
     setModalOpen(true)
   }
 
@@ -170,8 +184,8 @@ export function RegistrarRefundPage() {
   }
 
   // Column definitions
-  const columns = useMemo(
-    () => [
+  const columns = useMemo(() => {
+    const baseCols = [
       {
         id: 'student',
         header: 'Student',
@@ -193,7 +207,7 @@ export function RegistrarRefundPage() {
         accessorKey: 'programme',
         header: 'Programme',
         cell: ({ row }) => (
-          <span className="text-xs text-zinc-600 line-clamp-2 max-w-[240px]">
+          <span className="text-xs text-zinc-600 line-clamp-2 max-w-[220px]">
             {row.original.programme}
           </span>
         ),
@@ -210,6 +224,41 @@ export function RegistrarRefundPage() {
           )
         },
       },
+    ]
+
+    if (activeTab === 'REFUND_VERIFIED') {
+      baseCols.push(
+        {
+          accessorKey: 'deductions',
+          header: 'Deductions',
+          cell: ({ row }) => {
+            const ded = row.original.deductions
+            return (
+              <span className="font-mono text-xs text-rose-700 font-medium">
+                {ded != null ? `₹${Number(ded).toLocaleString('en-IN')}` : '₹0'}
+              </span>
+            )
+          },
+        },
+        {
+          accessorKey: 'final_amount',
+          header: 'Final Refund',
+          cell: ({ row }) => {
+            const fin =
+              row.original.final_amount != null
+                ? row.original.final_amount
+                : row.original.deposit_amount
+            return (
+              <span className="font-mono font-bold text-xs sm:text-sm text-emerald-800">
+                ₹{Number(fin).toLocaleString('en-IN')}
+              </span>
+            )
+          },
+        }
+      )
+    }
+
+    baseCols.push(
       {
         accessorKey: 'cleared_at',
         header: 'Cleared On',
@@ -250,10 +299,22 @@ export function RegistrarRefundPage() {
         header: 'Action',
         cell: ({ row }) => {
           const item = row.original
+          if (activeTab === 'REFUND_VERIFIED') {
+            return (
+              <Button
+                size="sm"
+                onClick={() => openRefundModal(item, 2)}
+                className="h-8 px-3 text-xs gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
+              >
+                <FileCheck2 className="w-3.5 h-3.5" />
+                Record UTR
+              </Button>
+            )
+          }
           return (
             <Button
               size="sm"
-              onClick={() => openRefundModal(item)}
+              onClick={() => openRefundModal(item, 1)}
               className="h-8 px-3 text-xs gap-1.5 bg-zinc-950 text-white hover:bg-zinc-800"
             >
               <CreditCard className="w-3.5 h-3.5" />
@@ -261,10 +322,11 @@ export function RegistrarRefundPage() {
             </Button>
           )
         },
-      },
-    ],
-    []
-  )
+      }
+    )
+
+    return baseCols
+  }, [activeTab])
 
   const renderMobileCard = (item) => (
     <div className="p-4 rounded-xl border border-border bg-white shadow-2xs space-y-3">
@@ -286,21 +348,50 @@ export function RegistrarRefundPage() {
         {item.programme}
       </div>
 
-      <div className="flex items-center justify-between text-xs text-zinc-500 pt-1 border-t border-zinc-100">
-        <span>Security Deposit:</span>
-        <span className="font-mono font-bold text-zinc-900 text-sm">
-          ₹{Number(item.deposit_amount).toLocaleString('en-IN')}
-        </span>
+      <div className="space-y-1 text-xs text-zinc-500 pt-1 border-t border-zinc-100">
+        <div className="flex items-center justify-between">
+          <span>Security Deposit:</span>
+          <span className="font-mono font-bold text-zinc-900">
+            ₹{Number(item.deposit_amount).toLocaleString('en-IN')}
+          </span>
+        </div>
+        {activeTab === 'REFUND_VERIFIED' && (
+          <>
+            <div className="flex items-center justify-between text-rose-700">
+              <span>Deductions:</span>
+              <span className="font-mono font-medium">
+                ₹{Number(item.deductions || 0).toLocaleString('en-IN')}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-emerald-800 font-bold">
+              <span>Net Refund:</span>
+              <span className="font-mono">
+                ₹{Number(item.final_amount != null ? item.final_amount : item.deposit_amount).toLocaleString('en-IN')}
+              </span>
+            </div>
+          </>
+        )}
       </div>
 
-      <Button
-        size="sm"
-        onClick={() => openRefundModal(item)}
-        className="w-full mt-2 h-8 text-xs gap-1.5 bg-zinc-950 text-white hover:bg-zinc-800"
-      >
-        <CreditCard className="w-3.5 h-3.5" />
-        Process Refund
-      </Button>
+      {activeTab === 'REFUND_VERIFIED' ? (
+        <Button
+          size="sm"
+          onClick={() => openRefundModal(item, 2)}
+          className="w-full mt-2 h-8 text-xs gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
+        >
+          <FileCheck2 className="w-3.5 h-3.5" />
+          Record UTR Reference
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          onClick={() => openRefundModal(item, 1)}
+          className="w-full mt-2 h-8 text-xs gap-1.5 bg-zinc-950 text-white hover:bg-zinc-800"
+        >
+          <CreditCard className="w-3.5 h-3.5" />
+          Process Refund
+        </Button>
+      )}
     </div>
   )
 
@@ -346,6 +437,25 @@ export function RegistrarRefundPage() {
           </div>
         </div>
 
+        {/* API Error State with Retry Button */}
+        {isError && (
+          <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-destructive">
+            <div className="flex items-center gap-2 text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Failed to load refund queue: {error?.response?.data?.detail || error?.message || 'Server connection error'}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              className="border-destructive/30 hover:bg-destructive/10 text-xs shrink-0"
+            >
+              <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+              Retry
+            </Button>
+          </div>
+        )}
+
         {/* Workflow Advisory Banner */}
         <div className="rounded-xl border border-border bg-zinc-50/70 p-4 text-xs text-zinc-600 space-y-1.5">
           <div className="flex items-center gap-2 font-semibold text-zinc-900">
@@ -353,10 +463,34 @@ export function RegistrarRefundPage() {
             <span>Post-Clearance Refund Procedure</span>
           </div>
           <p className="leading-relaxed text-[11px] text-zinc-500">
-            This queue contains students who have attained final HoD clearance (<code className="font-mono text-zinc-800">CLEARED</code>).
-            Enter verified deductions, review the live net calculation, approve the refund, and record the bank transaction reference (UTR/NEFT).
+            Audit applicable dues/deductions against student security deposits, confirm the final payable refund amount, and record official bank UTR/NEFT payment transaction identifiers.
           </p>
         </div>
+
+        {/* Lifecycle Status Tabs */}
+        <Tabs
+          value={activeTab}
+          onValueChange={(val) => {
+            setActiveTab(val)
+            setPageIndex(0)
+          }}
+          className="w-full"
+        >
+          <TabsList className="bg-zinc-100 p-1 border border-border">
+            <TabsTrigger
+              value="CLEARED"
+              className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
+            >
+              Awaiting Verification (CLEARED)
+            </TabsTrigger>
+            <TabsTrigger
+              value="REFUND_VERIFIED"
+              className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
+            >
+              Verified Refunds (Awaiting Payment Reference)
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
 
         {/* Search Toolbar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -388,8 +522,16 @@ export function RegistrarRefundPage() {
           pageSize={pageSize}
           onPageChange={setPageIndex}
           renderMobileCard={renderMobileCard}
-          emptyTitle="No cleared requests pending refund"
-          emptyDescription="There are currently no students awaiting security deposit refund reconciliation."
+          emptyTitle={
+            activeTab === 'CLEARED'
+              ? 'No cleared requests awaiting verification'
+              : 'No verified refunds awaiting disbursement'
+          }
+          emptyDescription={
+            activeTab === 'CLEARED'
+              ? 'There are currently no students in CLEARED status awaiting security deposit deduction audit.'
+              : 'There are currently no students in REFUND_VERIFIED status awaiting bank payment recording.'
+          }
         />
 
         {/* Refund Processing Modal (Chained Workflow) */}
@@ -529,14 +671,28 @@ export function RegistrarRefundPage() {
                   <form onSubmit={handleMarkProcessed} className="space-y-4">
                     {/* Success notification banner from Step 1 */}
                     <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/70 text-xs text-emerald-950 space-y-1">
-                      <div className="flex items-center gap-1.5 font-semibold text-emerald-900">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                        <span>Security Deposit Verified</span>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 font-semibold text-emerald-900">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          <span>Security Deposit Verified</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveStep(1)}
+                          className="text-[11px] text-emerald-800 hover:text-emerald-950 underline font-medium"
+                        >
+                          Modify Deductions
+                        </button>
                       </div>
                       <p className="text-[11px] text-emerald-900/90 leading-relaxed">
                         Approved net refund amount:{' '}
                         <strong className="font-mono text-emerald-950">
-                          ₹{verifiedResult?.final_amount?.toLocaleString('en-IN') ?? finalRefundNum.toLocaleString('en-IN')}
+                          ₹
+                          {verifiedResult?.final_amount != null
+                            ? verifiedResult.final_amount.toLocaleString('en-IN')
+                            : selectedRequest?.final_amount != null
+                            ? Number(selectedRequest.final_amount).toLocaleString('en-IN')
+                            : finalRefundNum.toLocaleString('en-IN')}
                         </strong>
                         . Now record the banking transaction identifier to mark this disbursement as completed.
                       </p>

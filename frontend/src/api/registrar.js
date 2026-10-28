@@ -2,15 +2,18 @@ import api from '@/lib/axios'
 
 export const registrarApi = {
   /**
-   * Get paginated requests in CLEARED status awaiting refund verification
+   * Get paginated requests queue
    * @param {Object} params
+   * @param {string} [params.status='CLEARED'] - CLEARED or REFUND_VERIFIED
    * @param {number} [params.limit=50]
    * @param {number} [params.offset=0]
    */
-  async getQueue({ limit = 50, offset = 0 } = {}) {
-    const response = await api.get('/registrar/queue', {
-      params: { limit, offset },
-    })
+  async getQueue({ status = 'CLEARED', limit = 50, offset = 0 } = {}) {
+    const params = { limit, offset }
+    if (status) {
+      params.status = status
+    }
+    const response = await api.get('/registrar/queue', { params })
     return response.data
   },
 

@@ -1,8 +1,25 @@
+# Environment files
 .env
+.env*
+!.env.example
+
+# Python
 .venv/
 __pycache__/
-node_modules/
-dist/
 *.py[cod]
+*$py.class
 *.egg-info/
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Node / Frontend
+node_modules/
+dist/
+.eslintcache
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

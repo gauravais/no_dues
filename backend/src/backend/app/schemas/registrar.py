@@ -11,6 +11,8 @@ class RegistrarQueueItem(BaseModel):
     registration_number: str = Field(..., description="Student registration number", examples=["DEMO2026001"])
     programme: str = Field(..., description="Enrolled degree programme", examples=["B.Tech Computer Engineering"])
     deposit_amount: Decimal = Field(..., description="Security deposit deposited initially", examples=[Decimal("5000.00")])
+    deductions: Decimal | None = Field(None, description="Approved deductions amount if verified", examples=[Decimal("250.00")])
+    final_amount: Decimal | None = Field(None, description="Calculated final refund amount if verified", examples=[Decimal("4750.00")])
     cleared_at: datetime | None = Field(None, description="Date cleared by HoD")
     status: str = Field(..., description="Clearance request status", examples=["CLEARED"])
     refund_status: str = Field(..., description="Refund record status", examples=["PENDING_VERIFICATION"])

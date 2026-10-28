@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { adminApi } from '@/api/admin'
 import { useAuth } from '@/auth/AuthContext'
@@ -30,11 +30,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import {
-  ACADEMIC_DEPARTMENTS,
-  ASSIGNABLE_DEPARTMENTS,
-  ALL_DEPARTMENTS,
-} from '@/lib/departments'
 import { toast } from 'sonner'
 import {
   Users,
@@ -56,6 +51,8 @@ import {
   UserX,
   UserCheck,
   Info,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 
 export function AdminDashboardPage() {
@@ -82,12 +79,15 @@ export function AdminDashboardPage() {
   const [hasCopiedPassword, setHasCopiedPassword] = useState(false)
 
   // User Actions State
-  const [lookupUserId, setLookupUserId] = useState('')
   const [confirmResetUser, setConfirmResetUser] = useState(null) // { id, email }
   const [confirmToggleActive, setConfirmToggleActive] = useState(null) // { id, active }
 
-  // Session-Provisioned Staff List (local state for immediate visibility since API lacks GET /admin/users)
-  const [sessionStaff, setSessionStaff] = useState([])
+  // Users Directory Query & Filter State (built on GET /admin/users)
+  const [userSearchTerm, setUserSearchTerm] = useState('')
+  const [userSearchQuery, setUserSearchQuery] = useState('')
+  const [userRoleFilter, setUserRoleFilter] = useState('ALL')
+  const [userPageSize] = useState(25)
+  const [userOffset, setUserOffset] = useState(0)
 
   // CSV Ingestion State
   const [csvFile, setCsvFile] = useState(null)
@@ -113,15 +113,61 @@ export function AdminDashboardPage() {
   // -------------------------------------------------------------
   // Queries
   // -------------------------------------------------------------
+
+  // Fetch active departments from GET /departments
+  const {
+    data: departments = [],
+    isLoading: departmentsLoading,
+  } = useQuery({
+    queryKey: ['departments'],
+    queryFn: adminApi.getDepartments,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const academicDepartments = useMemo(
+    () => departments.filter((d) => d.kind === 'academic' || d.applicability === 'OWN_ACADEMIC'),
+    [departments]
+  )
+  const assignableDepartments = useMemo(
+    () => departments.filter((d) => d.applicability === 'ASSIGNED_ONLY'),
+    [departments]
+  )
+
+  // Fetch student roster
   const {
     data: rosterData,
     isLoading: rosterLoading,
     isFetching: rosterFetching,
+    isError: rosterError,
+    error: rosterErrorObj,
     refetch: refetchRoster,
   } = useQuery({
     queryKey: ['admin-roster', { search: searchQuery, limit: pageSize, offset }],
     queryFn: () => adminApi.getRoster({ search: searchQuery, limit: pageSize, offset }),
     enabled: activeTab === 'roster',
+  })
+
+  // Fetch institutional user directory from GET /admin/users
+  const {
+    data: usersList = [],
+    isLoading: usersLoading,
+    isFetching: usersFetching,
+    isError: usersError,
+    error: usersErrorObj,
+    refetch: refetchUsers,
+  } = useQuery({
+    queryKey: [
+      'admin-users',
+      { search: userSearchQuery, role: userRoleFilter, limit: userPageSize, offset: userOffset },
+    ],
+    queryFn: () =>
+      adminApi.getUsers({
+        search: userSearchQuery,
+        role: userRoleFilter,
+        limit: userPageSize,
+        offset: userOffset,
+      }),
+    enabled: activeTab === 'users',
   })
 
   // -------------------------------------------------------------
@@ -169,8 +215,8 @@ export function AdminDashboardPage() {
   const createStaffMutation = useMutation({
     mutationFn: (payload) => adminApi.createStaffUser(payload),
     onSuccess: (data) => {
-      // Add to session list
-      setSessionStaff((prev) => [data, ...prev])
+      // Invalidate users directory query
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       // Reset form
       setNewStaffForm({
         full_name: '',
@@ -198,6 +244,7 @@ export function AdminDashboardPage() {
     mutationFn: (userId) => adminApi.resetPassword(userId),
     onSuccess: (data) => {
       setConfirmResetUser(null)
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       setTempPasswordModal({
         title: 'Temporary Password Reset Complete',
         email: data.email,
@@ -215,10 +262,7 @@ export function AdminDashboardPage() {
     mutationFn: ({ userId, isActive }) => adminApi.setUserActive(userId, isActive),
     onSuccess: (data) => {
       setConfirmToggleActive(null)
-      // Update in sessionStaff if present
-      setSessionStaff((prev) =>
-        prev.map((s) => (s.id === data.id ? { ...s, is_active: data.is_active } : s))
-      )
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] })
       toast.success(
         `User ${data.email} is now ${data.is_active ? 'Active' : 'Deactivated'}.`
       )
@@ -235,6 +279,12 @@ export function AdminDashboardPage() {
     e.preventDefault()
     setSearchQuery(searchTerm)
     setOffset(0)
+  }
+
+  const handleUserSearchSubmit = (e) => {
+    e.preventDefault()
+    setUserSearchQuery(userSearchTerm)
+    setUserOffset(0)
   }
 
   const handleOpenEditRoster = (student) => {
@@ -305,9 +355,9 @@ export function AdminDashboardPage() {
   const handleDownloadSampleCsv = () => {
     const csvContent =
       'registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\n' +
-      '2200101,Aarav Sharma,aarav.sharma@svsu.ac.in,9876543210,"H.No 12, Sector 14, Gurugram",B.Tech Robotics and Automation,true,5000\n' +
-      '2200102,Pooja Verma,pooja.verma@svsu.ac.in,9876543211,"Flat 402, Green Valley, Palwal",B.Tech Industry 4.0,false,3000\n' +
-      '2200103,Rohan Mehta,rohan.mehta@svsu.ac.in,9876543212,"Vill. Dudhola, Palwal, Haryana",B.Voc Automotive Studies,true,5000\n'
+      'SAMPLE001,Sample Student A,student.sample1@svsu.ac.in,9876543210,"H.No 12, Sector 14, Gurugram",B.Tech Robotics and Automation,true,5000\n' +
+      'SAMPLE002,Sample Student B,student.sample2@svsu.ac.in,9876543211,"Flat 402, Green Valley, Palwal",B.Tech Industry 4.0,false,3000\n' +
+      'SAMPLE003,Sample Student C,student.sample3@svsu.ac.in,9876543212,"Vill. Dudhola, Palwal, Haryana",B.Voc Automotive Studies,true,5000\n'
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -429,9 +479,9 @@ export function AdminDashboardPage() {
   const totalRoster = rosterData?.total || 0
   const rosterItems = rosterData?.items || []
 
-  // Department options based on selected role in staff form
+  // Department options based on selected role in staff form (dynamic from GET /departments)
   const availableDepartments =
-    newStaffForm.role === 'hod' ? ACADEMIC_DEPARTMENTS : ALL_DEPARTMENTS
+    newStaffForm.role === 'hod' ? academicDepartments : departments
 
   const isRoleDeptDisabled = newStaffForm.role === 'registrar_accounts'
 
@@ -492,6 +542,23 @@ export function AdminDashboardPage() {
           {/* TAB 1: STUDENT ROSTER                                     */}
           {/* ========================================================= */}
           <TabsContent value="roster" className="space-y-4">
+            {rosterError && (
+              <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-destructive">
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Failed to load student roster: {rosterErrorObj?.response?.data?.detail || rosterErrorObj?.message || 'Server error'}</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => refetchRoster()}
+                  className="border-destructive/30 hover:bg-destructive/10 text-xs shrink-0"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Retry
+                </Button>
+              </div>
+            )}
             <Card className="border-border bg-white shadow-card">
               <CardHeader className="p-4 sm:p-6 pb-4 border-b border-border/60">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -823,16 +890,23 @@ export function AdminDashboardPage() {
           {/* TAB 3: STAFF PROVISIONING & CREDENTIALS                   */}
           {/* ========================================================= */}
           <TabsContent value="staff" className="space-y-6">
-            {/* Informational API Gap Banner */}
-            <div className="p-4 rounded-xl border border-amber-200 bg-amber-50/70 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
-              <div className="text-xs text-amber-900">
-                <p className="font-semibold">API Architecture Note (No Directory Listing):</p>
-                <p className="mt-0.5 leading-relaxed">
-                  The backend contract does not expose an unrestricted user listing endpoint (<code>GET /admin/users</code>). You can provision new staff accounts below, manage users directly by their database User ID, or inspect staff created during this session.
-                </p>
+            {usersError && (
+              <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-destructive">
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Failed to load institutional user directory: {usersErrorObj?.response?.data?.detail || usersErrorObj?.message || 'Server error'}</span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => refetchUsers()}
+                  className="border-destructive/30 hover:bg-destructive/10 text-xs shrink-0"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Retry
+                </Button>
               </div>
-            </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Provision Form */}
@@ -966,153 +1040,204 @@ export function AdminDashboardPage() {
                 </CardContent>
               </Card>
 
-              {/* Direct User ID Lookup & Credential Management */}
+              {/* Institutional Users Directory Card (Live from GET /admin/users) */}
               <div className="space-y-4">
                 <Card className="border-border bg-white shadow-card">
                   <CardHeader className="p-6 pb-4 border-b border-border/60">
-                    <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center text-zinc-900">
-                        <KeyRound className="w-4 h-4" />
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center text-zinc-900">
+                          <Users className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <CardTitle className="font-heading text-base font-bold">
+                            University Users Directory
+                          </CardTitle>
+                          <CardDescription className="text-xs">
+                            Manage user accounts, roles, credentials, and access permissions.
+                          </CardDescription>
+                        </div>
                       </div>
-                      <div>
-                        <CardTitle className="font-heading text-base font-bold">
-                          Direct User ID Administration
-                        </CardTitle>
-                        <CardDescription className="text-xs">
-                          Trigger an instant temporary password reset or toggle active status by database User ID.
-                        </CardDescription>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => refetchUsers()}
+                        disabled={usersFetching}
+                        className="text-xs h-8 gap-1.5 border-border bg-white"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${usersFetching ? 'animate-spin' : ''}`} />
+                        Refresh
+                      </Button>
+                    </div>
+
+                    {/* Filter and Search Bar */}
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-4">
+                      <form onSubmit={handleUserSearchSubmit} className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                        <Input
+                          type="text"
+                          placeholder="Search users by name or email..."
+                          value={userSearchTerm}
+                          onChange={(e) => setUserSearchTerm(e.target.value)}
+                          className="pl-8 text-xs h-8 bg-zinc-50 border-border"
+                        />
+                      </form>
+
+                      <div className="w-full sm:w-48">
+                        <select
+                          value={userRoleFilter}
+                          onChange={(e) => {
+                            setUserRoleFilter(e.target.value)
+                            setUserOffset(0)
+                          }}
+                          className="w-full text-xs h-8 rounded-md border border-input bg-zinc-50 px-2.5 py-1 font-sans focus:outline-none focus:ring-1 focus:ring-ring"
+                        >
+                          <option value="ALL">All Roles</option>
+                          <option value="student">Student</option>
+                          <option value="dept_officer">Department Officer</option>
+                          <option value="hod">Chairperson (HoD)</option>
+                          <option value="registrar_accounts">Registrar / Accounts</option>
+                          <option value="admin">Administrator</option>
+                        </select>
                       </div>
                     </div>
                   </CardHeader>
 
-                  <CardContent className="p-6 pt-4 space-y-4">
-                    <div className="space-y-1.5">
-                      <Label htmlFor="lookupUserIdInput" className="text-xs font-semibold">
-                        Target User ID
-                      </Label>
-                      <Input
-                        id="lookupUserIdInput"
-                        type="number"
-                        placeholder="e.g. 15"
-                        value={lookupUserId}
-                        onChange={(e) => setLookupUserId(e.target.value)}
-                        className="text-xs h-9 font-mono"
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={!lookupUserId}
-                        onClick={() => {
-                          setConfirmResetUser({ id: Number(lookupUserId), email: `User #${lookupUserId}` })
-                        }}
-                        className="text-xs h-9 gap-1.5 text-zinc-700 hover:text-black"
-                      >
-                        <KeyRound className="w-3.5 h-3.5 text-amber-600" />
-                        Reset Password
-                      </Button>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={!lookupUserId}
-                        onClick={() => {
-                          if (Number(lookupUserId) === currentAdmin?.id) {
-                            toast.error('You cannot deactivate your own administrative account.')
-                            return
-                          }
-                          setConfirmToggleActive({ id: Number(lookupUserId), active: false })
-                        }}
-                        className="text-xs h-9 gap-1.5 text-rose-700 hover:text-rose-800 hover:bg-rose-50"
-                      >
-                        <UserX className="w-3.5 h-3.5" />
-                        Deactivate User
-                      </Button>
-
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={!lookupUserId}
-                        onClick={() => {
-                          setConfirmToggleActive({ id: Number(lookupUserId), active: true })
-                        }}
-                        className="text-xs h-9 gap-1.5 text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50"
-                      >
-                        <UserCheck className="w-3.5 h-3.5" />
-                        Activate User
-                      </Button>
-                    </div>
-
-                    <p className="text-[11px] text-muted-foreground leading-relaxed pt-2 border-t border-border">
-                      Resetting a password invalidates existing sessions immediately and generates a one-time temporary password. Deactivated users cannot authenticate.
-                    </p>
-                  </CardContent>
-                </Card>
-
-                {/* Session Provisioned Staff Table */}
-                <Card className="border-border bg-white shadow-card">
-                  <CardHeader className="p-4 pb-2 border-b border-border/60">
-                    <CardTitle className="font-heading text-xs font-bold uppercase tracking-wider text-muted-foreground">
-                      Staff Provisioned This Session ({sessionStaff.length})
-                    </CardTitle>
-                  </CardHeader>
                   <CardContent className="p-0">
-                    {sessionStaff.length === 0 ? (
-                      <div className="p-6 text-center text-xs text-muted-foreground">
-                        No staff accounts provisioned in this active browser session yet.
+                    {usersLoading ? (
+                      <div className="p-8 text-center text-xs text-muted-foreground">
+                        <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-2 text-zinc-400" />
+                        Loading user directory...
+                      </div>
+                    ) : usersList.length === 0 ? (
+                      <div className="p-8 text-center text-xs text-muted-foreground">
+                        No users found matching query criteria.
                       </div>
                     ) : (
-                      <div className="divide-y divide-border max-h-60 overflow-y-auto">
-                        {sessionStaff.map((staff) => (
-                          <div key={staff.id} className="p-3 flex items-center justify-between text-xs">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono text-[10px] text-zinc-400">ID #{staff.id}</span>
-                                <span className="font-semibold text-zinc-900">{staff.full_name || staff.email}</span>
+                      <div className="divide-y divide-border max-h-[500px] overflow-y-auto">
+                        {usersList.map((usr) => {
+                          const isSelf = usr.id === currentAdmin?.id
+                          return (
+                            <div
+                              key={usr.id}
+                              className="p-3.5 sm:px-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:bg-zinc-50/60 transition-colors"
+                            >
+                              <div className="space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-zinc-950 text-sm">
+                                    {usr.full_name || usr.email}
+                                  </span>
+                                  <span className="font-mono text-[10px] text-zinc-400">
+                                    #{usr.id}
+                                  </span>
+                                  <Badge
+                                    variant="outline"
+                                    className={`text-[10px] font-mono py-0 ${
+                                      usr.is_active
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                        : 'bg-rose-50 text-rose-800 border-rose-200'
+                                    }`}
+                                  >
+                                    {usr.is_active ? 'Active' : 'Deactivated'}
+                                  </Badge>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                                  <span className="font-mono">{usr.email}</span>
+                                  <span>•</span>
+                                  <Badge variant="outline" className="text-[10px] bg-zinc-50 font-mono py-0">
+                                    {usr.role}
+                                  </Badge>
+                                  {(usr.department_name || usr.department) && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-zinc-600 font-medium">
+                                        {usr.department_name || usr.department}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
                               </div>
-                              <div className="text-[11px] text-muted-foreground mt-0.5">
-                                {staff.email} • {staff.role}
+
+                              <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setConfirmResetUser({ id: usr.id, email: usr.email })
+                                  }}
+                                  className="h-7 px-2.5 text-[11px] gap-1 text-zinc-700 hover:text-black border-border bg-white"
+                                >
+                                  <KeyRound className="w-3 h-3 text-amber-600" />
+                                  Reset
+                                </Button>
+
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={isSelf}
+                                  onClick={() => {
+                                    if (isSelf) {
+                                      toast.error('You cannot deactivate your own account.')
+                                      return
+                                    }
+                                    setConfirmToggleActive({ id: usr.id, active: !usr.is_active })
+                                  }}
+                                  className={`h-7 px-2.5 text-[11px] gap-1 border-border bg-white ${
+                                    usr.is_active
+                                      ? 'text-rose-700 hover:text-rose-800 hover:bg-rose-50'
+                                      : 'text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50'
+                                  }`}
+                                  title={isSelf ? 'Cannot deactivate your own account' : undefined}
+                                >
+                                  {usr.is_active ? (
+                                    <>
+                                      <UserX className="w-3 h-3" />
+                                      Deactivate
+                                    </>
+                                  ) : (
+                                    <>
+                                      <UserCheck className="w-3 h-3" />
+                                      Activate
+                                    </>
+                                  )}
+                                </Button>
                               </div>
                             </div>
-                            <div className="flex items-center gap-1.5">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  setConfirmResetUser({ id: staff.id, email: staff.email })
-                                }}
-                                className="h-7 px-2 text-[11px] text-zinc-600 hover:text-black"
-                              >
-                                Reset
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  if (staff.id === currentAdmin?.id) {
-                                    toast.error('You cannot deactivate your own account.')
-                                    return
-                                  }
-                                  setConfirmToggleActive({ id: staff.id, active: !staff.is_active })
-                                }}
-                                className={`h-7 px-2 text-[11px] ${
-                                  staff.is_active
-                                    ? 'text-rose-600 hover:text-rose-700'
-                                    : 'text-emerald-600 hover:text-emerald-700'
-                                }`}
-                              >
-                                {staff.is_active ? 'Deactivate' : 'Activate'}
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     )}
+
+                    {/* Pagination Bar */}
+                    <div className="p-3 border-t border-border bg-zinc-50/60 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>
+                        Showing <strong className="text-zinc-800">{userOffset + 1}</strong> -{' '}
+                        <strong className="text-zinc-800">{userOffset + usersList.length}</strong> users
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={userOffset === 0 || usersLoading}
+                          onClick={() => setUserOffset((prev) => Math.max(0, prev - userPageSize))}
+                          className="h-7 px-2 text-[11px] gap-1 border-border bg-white"
+                        >
+                          <ChevronLeft className="w-3 h-3" />
+                          Previous
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={usersList.length < userPageSize || usersLoading}
+                          onClick={() => setUserOffset((prev) => prev + userPageSize)}
+                          className="h-7 px-2 text-[11px] gap-1 border-border bg-white"
+                        >
+                          Next
+                          <ChevronRight className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               </div>
@@ -1237,27 +1362,38 @@ export function AdminDashboardPage() {
 
           <div className="space-y-4 py-2">
             <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto p-1 border rounded-lg">
-              {ASSIGNABLE_DEPARTMENTS.map((dept) => {
-                const isChecked = selectedDeptIds.includes(dept.id)
-                return (
-                  <label
-                    key={dept.id}
-                    className={`flex items-center gap-2 p-2 rounded text-xs cursor-pointer border transition-colors ${
-                      isChecked
-                        ? 'bg-zinc-100 border-zinc-400 font-semibold text-black'
-                        : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => toggleDeptId(dept.id)}
-                      className="rounded border-zinc-300 text-black focus:ring-black"
-                    />
-                    <span>{dept.name}</span>
-                  </label>
-                )
-              })}
+              {departmentsLoading ? (
+                <div className="col-span-2 p-6 text-center text-xs text-muted-foreground">
+                  <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-2 text-zinc-400" />
+                  Loading departments...
+                </div>
+              ) : assignableDepartments.length === 0 ? (
+                <div className="col-span-2 p-6 text-center text-xs text-muted-foreground">
+                  No assignable laboratories or workshops configured.
+                </div>
+              ) : (
+                assignableDepartments.map((dept) => {
+                  const isChecked = selectedDeptIds.includes(dept.id)
+                  return (
+                    <label
+                      key={dept.id}
+                      className={`flex items-center gap-2 p-2 rounded text-xs cursor-pointer border transition-colors ${
+                        isChecked
+                          ? 'bg-zinc-100 border-zinc-400 font-semibold text-black'
+                          : 'bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleDeptId(dept.id)}
+                        className="rounded border-zinc-300 text-black focus:ring-black"
+                      />
+                      <span>{dept.name}</span>
+                    </label>
+                  )
+                })
+              )}
             </div>
 
             <p className="text-[11px] text-muted-foreground">

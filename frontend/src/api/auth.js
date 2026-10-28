@@ -5,8 +5,9 @@ export const authApi = {
    * OAuth2 password login (form-urlencoded)
    */
   async login(email, password) {
+    const normalizedEmail = (email || '').trim().toLowerCase()
     const formData = new URLSearchParams()
-    formData.append('username', email)
+    formData.append('username', normalizedEmail)
     formData.append('password', password)
 
     const response = await api.post('/auth/login', formData, {

@@ -17,6 +17,7 @@ import {
   Clock,
   ArrowRight,
   ShieldCheck,
+  AlertCircle,
 } from 'lucide-react'
 
 export function HodQueuePage() {
@@ -28,6 +29,8 @@ export function HodQueuePage() {
   const {
     data: queue = [],
     isLoading,
+    isError,
+    error,
     isRefetching,
     refetch,
   } = useQuery({
@@ -200,6 +203,25 @@ export function HodQueuePage() {
             </Button>
           </div>
         </div>
+
+        {/* API Error State with Retry Button */}
+        {isError && (
+          <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-destructive">
+            <div className="flex items-center gap-2 text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Failed to load Chairperson review queue: {error?.response?.data?.detail || error?.message || 'Server connection error'}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              className="border-destructive/30 hover:bg-destructive/10 text-xs shrink-0"
+            >
+              <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+              Retry
+            </Button>
+          </div>
+        )}
 
         {/* Informational Guidance Banner */}
         <div className="rounded-xl border border-zinc-200 bg-zinc-50/60 p-4 flex items-start gap-3 text-xs text-zinc-600">

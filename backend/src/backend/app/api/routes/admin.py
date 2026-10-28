@@ -12,7 +12,8 @@ from sqlalchemy import select, func, or_, delete
 from sqlalchemy.orm import joinedload
 
 from backend.app.api.deps import SessionDep, require_roles
-from backend.app.core.security import hash_password
+from backend.app.core.config import settings
+from backend.app.core.security import hash_password, normalize_email
 from backend.app.models.user import User, UserRole
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
 from backend.app.models.university import Department, Programme, DepartmentKind
@@ -29,6 +30,7 @@ from backend.app.schemas.admin import (
     AdminUserResponse,
     AdminResetPasswordResponse,
     AdminUserActiveRequest,
+    AdminUserListItem,
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -133,7 +135,7 @@ async def upload_roster_csv(
     for idx, row in enumerate(reader, start=1):
         reg_num = (row.get(fieldnames_map["registration_number"]) or "").strip()
         name = (row.get(fieldnames_map["name"]) or "").strip()
-        email = (row.get(fieldnames_map["email"]) or "").strip().lower()
+        email = normalize_email(row.get(fieldnames_map["email"]))
         mobile = (row.get(fieldnames_map["mobile"]) or "").strip()
         address = (row.get(fieldnames_map["address"]) or "").strip()
         prog_str = (row.get(fieldnames_map["programme"]) or "").strip()
@@ -153,6 +155,19 @@ async def upload_roster_csv(
 
         if not EMAIL_REGEX.match(email):
             row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason=f"Invalid email format: '{email}'"))
+            rejected_count += 1
+            continue
+
+        domain = email.split("@")[-1] if "@" in email else ""
+        if domain not in settings.allowed_email_domain_list:
+            row_reports.append(
+                RosterUploadRowReport(
+                    row_number=idx,
+                    registration_number=reg_num,
+                    status="rejected",
+                    reason=f"Email domain '@{domain}' is not allowed. Allowed domains: {', '.join(settings.allowed_email_domain_list)}",
+                )
+            )
             rejected_count += 1
             continue
 
@@ -179,6 +194,49 @@ async def upload_roster_csv(
         ).scalars().first()
 
         if existing:
+            # Check if email is being changed
+            if existing.email != email:
+                # Check email uniqueness against other roster rows
+                email_clash = db.execute(
+                    select(StudentRoster).where(
+                        func.lower(StudentRoster.email) == email,
+                        StudentRoster.id != existing.id,
+                    )
+                ).scalars().first()
+                if email_clash:
+                    row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason=f"Email '{email}' is already registered to another student ({email_clash.registration_number})"))
+                    rejected_count += 1
+                    continue
+
+                # Check if this student already has a user account
+                student_user = db.execute(
+                    select(User).where(User.roster_id == existing.id)
+                ).scalars().first()
+
+                if student_user:
+                    # Check if email is taken by another user
+                    user_clash = db.execute(
+                        select(User).where(
+                            func.lower(User.email) == email,
+                            User.id != student_user.id,
+                        )
+                    ).scalars().first()
+                    if user_clash:
+                        row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason=f"Email '{email}' is already taken by another user account"))
+                        rejected_count += 1
+                        continue
+
+                    old_user_email = student_user.email
+                    student_user.email = email
+                    _record_admin_audit(
+                        db,
+                        current_user.id,
+                        action="UPDATE_USER_EMAIL_FROM_ROSTER_CSV",
+                        entity_type="users",
+                        entity_id=student_user.id,
+                        details={"old_email": old_user_email, "new_email": email, "roster_id": existing.id},
+                    )
+
             existing.name = name
             existing.email = email
             existing.mobile = mobile
@@ -191,10 +249,19 @@ async def upload_roster_csv(
         else:
             # Check email uniqueness against existing roster
             email_clash = db.execute(
-                select(StudentRoster).where(StudentRoster.email == email)
+                select(StudentRoster).where(func.lower(StudentRoster.email) == email)
             ).scalars().first()
             if email_clash:
                 row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason=f"Email '{email}' is already registered to another student ({email_clash.registration_number})"))
+                rejected_count += 1
+                continue
+
+            # Check email uniqueness against existing users
+            user_clash = db.execute(
+                select(User).where(func.lower(User.email) == email)
+            ).scalars().first()
+            if user_clash:
+                row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason=f"Email '{email}' is already taken by another user account"))
                 rejected_count += 1
                 continue
 
@@ -341,6 +408,72 @@ def update_roster_entry(
         changes["mobile"] = body.mobile.strip()
         roster.mobile = body.mobile.strip()
 
+    if body.email is not None:
+        new_email = normalize_email(str(body.email))
+        if not EMAIL_REGEX.match(new_email):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid email format: '{new_email}'")
+
+        domain = new_email.split("@")[-1] if "@" in new_email else ""
+        if domain not in settings.allowed_email_domain_list:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Email domain '@{domain}' is not allowed. Allowed domains: {', '.join(settings.allowed_email_domain_list)}",
+            )
+
+        if new_email != roster.email:
+            # Check clash with another roster entry
+            roster_clash = db.execute(
+                select(StudentRoster).where(
+                    func.lower(StudentRoster.email) == new_email,
+                    StudentRoster.id != roster.id,
+                )
+            ).scalars().first()
+            if roster_clash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Email '{new_email}' is already in use by another roster entry ({roster_clash.registration_number}).",
+                )
+
+            # Check if student has a linked user account
+            student_user = db.execute(
+                select(User).where(User.roster_id == roster.id)
+            ).scalars().first()
+
+            if student_user:
+                user_clash = db.execute(
+                    select(User).where(
+                        func.lower(User.email) == new_email,
+                        User.id != student_user.id,
+                    )
+                ).scalars().first()
+                if user_clash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Email '{new_email}' is already taken by another user account.",
+                    )
+                old_user_email = student_user.email
+                student_user.email = new_email
+                _record_admin_audit(
+                    db,
+                    current_user.id,
+                    action="UPDATE_USER_EMAIL_FROM_ROSTER",
+                    entity_type="users",
+                    entity_id=student_user.id,
+                    details={"old_email": old_user_email, "new_email": new_email, "roster_id": roster.id},
+                )
+            else:
+                user_clash = db.execute(
+                    select(User).where(func.lower(User.email) == new_email)
+                ).scalars().first()
+                if user_clash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Email '{new_email}' is already taken by another user account.",
+                    )
+
+            changes["email"] = new_email
+            roster.email = new_email
+
     _record_admin_audit(
         db,
         current_user.id,
@@ -449,8 +582,16 @@ def create_staff_user(
             detail=f"Admin can only create staff roles: dept_officer, hod, registrar_accounts. Received: {body.role.value}",
         )
 
-    # Check email conflict
-    email_clean = body.email.strip().lower()
+    # Normalize and validate email domain
+    email_clean = normalize_email(str(body.email))
+    domain = email_clean.split("@")[-1] if "@" in email_clean else ""
+    if domain not in settings.allowed_email_domain_list:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Email domain '{domain}' is not allowed for staff creation. Allowed domains: {', '.join(settings.allowed_email_domain_list)}",
+        )
+
+    # Check email conflict case-insensitively
     existing_user = db.execute(
         select(User).where(func.lower(User.email) == email_clean)
     ).scalars().first()
@@ -621,3 +762,62 @@ def toggle_user_active(
         department_name=dept_name,
         is_active=user.is_active,
     )
+
+
+@router.get(
+    "/users",
+    response_model=list[AdminUserListItem],
+    status_code=status.HTTP_200_OK,
+    operation_id="list_admin_users",
+    summary="List University Users Directory",
+    description=(
+        "Retrieves a list of university users (students, officers, HoDs, accounts, admins). "
+        "Supports search by email or name, and filtering by role. Password hashes are never returned."
+    ),
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def list_admin_users(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+    search: str | None = Query(None, description="Search by email or full name"),
+    role: UserRole | None = Query(None, description="Filter by user role"),
+    limit: int = Query(50, ge=1, le=100, description="Page limit"),
+    offset: int = Query(0, ge=0, description="Page offset"),
+) -> list[AdminUserListItem]:
+    stmt = (
+        select(User)
+        .options(joinedload(User.department))
+        .order_by(User.id.asc())
+    )
+
+    if role:
+        stmt = stmt.where(User.role == role)
+
+    if search and search.strip():
+        term = f"%{search.strip().lower()}%"
+        stmt = stmt.where(
+            or_(
+                func.lower(User.email).like(term),
+                func.lower(User.full_name).like(term),
+            )
+        )
+
+    stmt = stmt.offset(offset).limit(limit)
+    users = db.execute(stmt).scalars().all()
+
+    return [
+        AdminUserListItem(
+            id=u.id,
+            email=u.email,
+            full_name=u.full_name,
+            role=u.role.value,
+            department=u.department.name if u.department else None,
+            department_name=u.department.name if u.department else None,
+            department_id=u.department_id,
+            is_active=u.is_active,
+            created_at=u.created_at,
+        )
+        for u in users
+    ]

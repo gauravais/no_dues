@@ -8,6 +8,7 @@ from backend.app.models.user import User, UserRole
 from backend.app.models.clearance import (
     ClearanceRequest,
     ClearanceStatus,
+    DepartmentApproval,
 )
 from backend.app.models.roster import StudentRoster
 from backend.app.models.university import Programme
@@ -43,10 +44,15 @@ def _format_hod_detail(req: ClearanceRequest) -> HoDRequestDetailResponse:
             remarks=a.remarks,
             previous_remarks=a.previous_remarks,
             decided_at=a.decided_at,
+            decided_by_name=a.decided_by_user.full_name if a.decided_by_user else None,
             resubmission_count=a.resubmission_count,
         )
         for a in (req.approvals or [])
     ]
+
+    cert_code = None
+    if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED) and req.certificate:
+        cert_code = req.certificate.certificate_code
 
     return HoDRequestDetailResponse(
         request_id=req.id,
@@ -57,6 +63,7 @@ def _format_hod_detail(req: ClearanceRequest) -> HoDRequestDetailResponse:
         is_hosteller=r.is_hosteller if r else False,
         submitted_at=req.submitted_at,
         hod_remarks=req.hod_remarks,
+        certificate_code=cert_code,
         approvals=approval_items,
     )
 
@@ -144,9 +151,11 @@ def get_hod_request_detail(
         .where(ClearanceRequest.id == request_id)
         .options(
             joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.programme),
-            joinedload(ClearanceRequest.approvals),
+            joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.department),
+            joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.decided_by_user),
+            joinedload(ClearanceRequest.certificate),
         )
-    ).scalar_one_or_none()
+    ).unique().scalar_one_or_none()
 
     if not req:
         raise HTTPException(

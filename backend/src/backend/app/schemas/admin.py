@@ -1,4 +1,5 @@
 """Pydantic schemas for university administration."""
+from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel, EmailStr, Field
 from backend.app.models.user import UserRole
@@ -48,6 +49,7 @@ class RosterUpdateRequest(BaseModel):
     security_deposit_amount: Decimal | None = Field(None, ge=0)
     address: str | None = None
     mobile: str | None = None
+    email: EmailStr | None = None
 
 
 class RosterAssignedDepartmentsRequest(BaseModel):
@@ -101,3 +103,16 @@ class AdminResetPasswordResponse(BaseModel):
 class AdminUserActiveRequest(BaseModel):
     """Payload to activate or deactivate a user account."""
     is_active: bool
+
+
+class AdminUserListItem(BaseModel):
+    """User account item in admin user directory."""
+    id: int
+    email: str
+    full_name: str | None = None
+    role: str
+    department: str | None = None
+    department_name: str | None = None
+    department_id: int | None = None
+    is_active: bool
+    created_at: datetime

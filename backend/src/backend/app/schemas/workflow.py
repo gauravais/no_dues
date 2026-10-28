@@ -14,6 +14,7 @@ class DepartmentApprovalItem(BaseModel):
     remarks: str | None = Field(None, description="Department officer remarks (mandatory on rejection)", examples=["Fine pending: Rs. 150"])
     previous_remarks: str | None = Field(None, description="Previous rejection reason before student resubmitted", examples=["Fine pending: Rs. 150"])
     decided_at: datetime | None = Field(None, description="Timestamp when decision was rendered")
+    decided_by_name: str | None = Field(None, description="Full name of officer who decided approval", examples=["Library Officer (Demo)"])
     resubmission_count: int = Field(..., description="Number of times student resubmitted to this department", examples=[0])
 
 
@@ -81,4 +82,14 @@ class HoDRequestDetailResponse(BaseModel):
     is_hosteller: bool = Field(..., description="Hosteller status", examples=[True])
     submitted_at: datetime = Field(..., description="Initial submission timestamp")
     hod_remarks: str | None = Field(None, description="Previous HoD rejection remarks if any")
+    certificate_code: str | None = Field(None, description="Official clearance certificate UUID code if cleared", examples=["c8e54701-d70c-43a4-8490-6ce3b49725f8"])
     approvals: list[DepartmentApprovalItem] = Field(..., description="Full table of all departmental clearance decisions")
+
+
+class DepartmentResponse(BaseModel):
+    """University department basic metadata."""
+    id: int = Field(..., description="Department ID", examples=[1])
+    name: str = Field(..., description="Department name", examples=["Central Library"])
+    kind: str = Field(..., description="Department kind: academic or service", examples=["service"])
+    applicability: str = Field(..., description="Applicability rule", examples=["ALWAYS"])
+

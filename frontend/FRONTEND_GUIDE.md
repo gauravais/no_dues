@@ -235,4 +235,28 @@ frontend/
 - **Dynamic Document Titles**: `useDocumentTitle` hook dynamically sets descriptive window titles (e.g. `Institutional Admin | SVSU No-Dues`).
 - **Performance & Code-Splitting**: Lenis momentum scrolling and GSAP animation engines are dynamically imported (`import()`) exclusively on the public Landing route, maintaining small, fast bundles for all authenticated dashboard views.
 
+---
+
+## 8. Seeded Demo Accounts Reference
+
+All seeded demo accounts in the development database are created via `backend/scripts/seed_synthetic.py`. Default passwords are never published in public documentation; they are derived from the `SEED_DEFAULT_PASSWORD` environment variable in `backend/.env`.
+
+| Role | Demo Email Address | User Full Name / Scope |
+|---|---|---|
+| **System Administrator** | `admin@example.edu` | System Administrator (Demo) |
+| **Registrar / Accounts** | `registrar.accounts@example.edu` | Accounts Officer (Demo) / R&S Branch |
+| **Chairperson (HoD) CS/IT** | `hod.csit@example.edu` | Chairperson Skill Department of CS/IT (Demo) |
+| **Department Officer (Library)** | `library.officer@example.edu` | Library Officer (Demo) / Central Library |
+| **Department Officer (Hostel)** | `hostel.officer@example.edu` | Hostel (Boys/Girls) Officer (Demo) |
+| **Department Officer (Sports)** | `sports.officer@example.edu` | Sports Officer (Demo) / Sports Section |
+| **Department Officer (CS/IT)** | `officer.csit@example.edu` | Skill Department of CS/IT Officer (Demo) |
+| **Department Officer (Accounts)** | `accounts.officer@example.edu` | Account Section Officer (Demo) |
+| **Student 1 (Hosteller)** | `arjun.mehta@example.edu` | Arjun Mehta (DEMO2026001, B.Tech CE, Assigned: Lab-2, Lab-5) |
+| **Student 2 (Hosteller)** | `priya.sharma@example.edu` | Priya Sharma (DEMO2026002, MCA, Assigned: Lab-3) |
+| **Student 3 (Day Scholar)** | `sneha.patel@example.edu` | Sneha Patel (DEMO2026004, B.Voc Solar Technology) |
+| **Unregistered Student (Sign-Up Demo)** | `aman.gupta@example.edu` | Aman Gupta (DEMO2026006, test OTP sign-up flow) |
+
+> **Institutional Email Format Note**: Real university email formats (students: `<registration_number>@svsu.ac.in`, staff: `<name>@svsu.ac.in`) are accepted and normalized by the system during production registration and login, but they are not part of the demo dataset. All seeded demo accounts exist strictly on the `@example.edu` domain.
+
+
 

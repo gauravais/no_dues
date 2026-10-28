@@ -49,6 +49,7 @@ def _format_request_response(req: ClearanceRequest) -> CurrentRequestResponse:
             remarks=a.remarks,
             previous_remarks=a.previous_remarks,
             decided_at=a.decided_at,
+            decided_by_name=a.decided_by_user.full_name if a.decided_by_user else None,
             resubmission_count=a.resubmission_count,
         )
         for a in approvals
@@ -119,10 +120,11 @@ def get_current_request(
         select(ClearanceRequest)
         .where(ClearanceRequest.roster_id == student_user.roster_id)
         .options(
-            joinedload(ClearanceRequest.approvals)
+            joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.department),
+            joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.decided_by_user),
         )
         .order_by(ClearanceRequest.created_at.desc())
-    ).scalars().first()
+    ).unique().scalars().first()
 
     if not req:
         raise HTTPException(
@@ -166,6 +168,7 @@ def resubmit_to_department(
             remarks=approval.remarks,
             previous_remarks=approval.previous_remarks,
             decided_at=approval.decided_at,
+            decided_by_name=approval.decided_by_user.full_name if approval.decided_by_user else None,
             resubmission_count=approval.resubmission_count,
         )
     except WorkflowNotFoundError as e:

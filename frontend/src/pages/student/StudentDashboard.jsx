@@ -45,107 +45,9 @@ import {
   ShieldAlert,
 } from 'lucide-react'
 
-const MOCK_BANK_DETAILS = {
-  account_number_masked: '••••••••4192',
-  ifsc_code: 'SBIN0001234',
-  account_holder_name: 'Aarav Sharma',
-  bank_address: 'State Bank of India, SVSU Campus Branch',
-}
-
-const MOCK_ACTIVE_REQUEST = {
-  id: 104,
-  status: 'SUBMITTED',
-  created_at: '2026-10-24T10:00:00Z',
-  remarks: 'Final semester clearance for B.Tech Degree Conferment',
-  hod_remarks: null,
-  approvals: [
-    {
-      id: 1,
-      department_id: 1,
-      department_name: 'Central Library',
-      status: 'APPROVED',
-      remarks: 'All 4 borrowed textbooks returned, no outstanding overdue fines.',
-      updated_at: '2026-10-24T11:20:00Z',
-    },
-    {
-      id: 2,
-      department_id: 2,
-      department_name: 'Sports Office',
-      status: 'APPROVED',
-      remarks: 'Badminton equipment and gym locker cleared.',
-      updated_at: '2026-10-24T11:45:00Z',
-    },
-    {
-      id: 3,
-      department_id: 3,
-      department_name: 'Hostel Office',
-      status: 'PENDING',
-      remarks: null,
-      updated_at: null,
-    },
-    {
-      id: 4,
-      department_id: 4,
-      department_name: 'Mess / Cafeteria',
-      status: 'APPROVED',
-      remarks: 'Mess bill for October 2026 reconciled and settled.',
-      updated_at: '2026-10-24T12:05:00Z',
-    },
-    {
-      id: 5,
-      department_id: 5,
-      department_name: 'Laboratories',
-      status: 'APPROVED',
-      remarks: 'Hardware lab kit and keys handed over to lab assistant.',
-      updated_at: '2026-10-24T13:10:00Z',
-    },
-    {
-      id: 6,
-      department_id: 6,
-      department_name: 'Computer Centre & IT',
-      status: 'APPROVED',
-      remarks: 'Campus email archive initiated, VPN account suspended.',
-      updated_at: '2026-10-24T14:30:00Z',
-    },
-    {
-      id: 7,
-      department_id: 7,
-      department_name: 'Transport Department',
-      status: 'APPROVED',
-      remarks: 'Bus pass surrendered.',
-      updated_at: '2026-10-24T14:55:00Z',
-    },
-    {
-      id: 8,
-      department_id: 8,
-      department_name: 'Training & Placement Cell',
-      status: 'APPROVED',
-      remarks: 'Mandatory graduate exit survey submitted.',
-      updated_at: '2026-10-24T15:20:00Z',
-    },
-    {
-      id: 9,
-      department_id: 9,
-      department_name: 'Alumni Association',
-      status: 'APPROVED',
-      remarks: 'Life membership registration confirmed.',
-      updated_at: '2026-10-24T16:00:00Z',
-    },
-    {
-      id: 10,
-      department_id: 10,
-      department_name: 'Scholarship Section',
-      status: 'PENDING',
-      remarks: null,
-      updated_at: null,
-    },
-  ],
-}
-
 export function StudentDashboard() {
   useDocumentTitle('Student Clearance')
-  const { user, token } = useAuth()
-  const isMock = token === 'dev-preview-token' || (typeof window !== 'undefined' && window.location.search.includes('mock=student'))
+  const { user } = useAuth()
 
   // State for Bank Details modal
   const [bankModalOpen, setBankModalOpen] = useState(false)
@@ -174,11 +76,12 @@ export function StudentDashboard() {
   const {
     data: bankDetails,
     isLoading: bankLoading,
+    isError: bankError,
+    error: bankErrorObj,
     refetch: refetchBank,
   } = useQuery({
     queryKey: ['student', 'bank-details'],
     queryFn: async () => {
-      if (isMock) return MOCK_BANK_DETAILS
       try {
         return await studentApi.getBankDetails()
       } catch (err) {
@@ -193,12 +96,13 @@ export function StudentDashboard() {
   const {
     data: currentRequest,
     isLoading: requestLoading,
+    isError: requestError,
+    error: requestErrorObj,
     isRefetching: requestRefetching,
     refetch: refetchRequest,
   } = useQuery({
     queryKey: ['student', 'current-request'],
     queryFn: async () => {
-      if (isMock) return MOCK_ACTIVE_REQUEST
       try {
         const res = await studentApi.getCurrentRequest()
         setLastRefreshed(new Date())
@@ -208,7 +112,7 @@ export function StudentDashboard() {
         throw err
       }
     },
-    refetchInterval: isMock ? false : 30000, // 30s live polling (disabled in mock/preview)
+    refetchInterval: 30000, // 30s live polling
   })
 
   // Pre-fill holder name when bank details dialog opens
@@ -406,6 +310,33 @@ export function StudentDashboard() {
             </Button>
           </div>
         </div>
+
+        {/* API Error State with Retry Button */}
+        {(bankError || requestError) && (
+          <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-destructive">
+            <div className="flex items-center gap-2.5 text-sm">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <div>
+                <p className="font-semibold text-zinc-900 text-xs sm:text-sm">Unable to load clearance data</p>
+                <p className="text-xs text-zinc-600 mt-0.5">
+                  {requestErrorObj?.response?.data?.detail || bankErrorObj?.response?.data?.detail || 'Could not communicate with the university clearance service.'}
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (bankError) refetchBank()
+                if (requestError) refetchRequest()
+              }}
+              className="border-destructive/30 hover:bg-destructive/10 text-xs text-destructive shrink-0"
+            >
+              <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+              Retry Connection
+            </Button>
+          </div>
+        )}
 
         {/* Loading Skeletons */}
         {requestLoading && bankLoading ? (
@@ -722,16 +653,23 @@ export function StudentDashboard() {
                             )}
 
                             {/* Metadata Strip */}
-                            <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-zinc-100">
-                              <span>
-                                {item.decided_at
-                                  ? `Decided: ${new Date(item.decided_at).toLocaleDateString()}`
-                                  : 'Awaiting officer sign-off'}
-                              </span>
-                              {item.resubmission_count > 0 && (
-                                <Badge variant="outline" className="text-[10px] bg-zinc-50 font-mono py-0">
-                                  Resubmitted {item.resubmission_count}x
-                                </Badge>
+                            <div className="flex flex-col gap-1 text-[11px] text-muted-foreground pt-1 border-t border-zinc-100">
+                              <div className="flex items-center justify-between">
+                                <span>
+                                  {item.decided_at
+                                    ? `Decided: ${new Date(item.decided_at).toLocaleDateString()}`
+                                    : 'Awaiting officer sign-off'}
+                                </span>
+                                {item.resubmission_count > 0 && (
+                                  <Badge variant="outline" className="text-[10px] bg-zinc-50 font-mono py-0">
+                                    Resubmitted {item.resubmission_count}x
+                                  </Badge>
+                                )}
+                              </div>
+                              {item.decided_by_name && (
+                                <div className="text-[11px] text-zinc-600 font-medium">
+                                  Officer: <span className="text-zinc-900">{item.decided_by_name}</span>
+                                </div>
                               )}
                             </div>
                           </CardContent>

@@ -29,31 +29,42 @@ require_registrar = require_roles(UserRole.registrar_accounts)
     response_model=RegistrarQueueResponse,
     status_code=status.HTTP_200_OK,
     operation_id="get_registrar_queue",
-    summary="Get Cleared Requests for Refund",
+    summary="Get Cleared or Refund-Verified Requests for Refund",
     description=(
-        "Returns a paginated list of clearance requests currently in CLEARED status, awaiting security deposit "
-        "reconciliation and refund verification by the university accounts branch."
+        "Returns a paginated list of clearance requests in CLEARED or REFUND_VERIFIED status, "
+        "allowing the university accounts branch to verify refunds and record disbursement payment references."
     ),
     responses={
+        400: {"model": ErrorResponse, "description": "Invalid status parameter. Must be CLEARED or REFUND_VERIFIED."},
         403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
     },
 )
 def get_registrar_queue(
     db: SessionDep,
     current_user: User = Depends(require_registrar),
+    queue_status: str = Query("CLEARED", alias="status", description="Filter by clearance status: CLEARED (default) or REFUND_VERIFIED"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> RegistrarQueueResponse:
-    # Count total cleared requests
+    clean_status = queue_status.strip().upper()
+    if clean_status not in ("CLEARED", "REFUND_VERIFIED"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid status '{queue_status}'. Allowed values are 'CLEARED' or 'REFUND_VERIFIED'.",
+        )
+
+    target_status = ClearanceStatus(clean_status)
+
+    # Count total requests matching status
     total = db.scalar(
         select(func.count(ClearanceRequest.id))
-        .where(ClearanceRequest.status == ClearanceStatus.CLEARED)
+        .where(ClearanceRequest.status == target_status)
     ) or 0
 
     # Fetch batch
     requests = db.execute(
         select(ClearanceRequest)
-        .where(ClearanceRequest.status == ClearanceStatus.CLEARED)
+        .where(ClearanceRequest.status == target_status)
         .options(
             joinedload(ClearanceRequest.roster_entry)
             .joinedload(StudentRoster.programme),
@@ -72,6 +83,8 @@ def get_registrar_queue(
         dep_amt = req.refund.deposit_amount if req.refund else (r.security_deposit_amount if r else 0)
         cleared_date = req.certificate.issued_at if req.certificate else req.updated_at
         refund_st = req.refund.status.value if req.refund else "N/A"
+        deductions = req.refund.deductions if req.refund else None
+        final_amt = req.refund.final_amount if req.refund else None
 
         items.append(
             RegistrarQueueItem(
@@ -80,6 +93,8 @@ def get_registrar_queue(
                 registration_number=r.registration_number if r else "N/A",
                 programme=prog_name,
                 deposit_amount=dep_amt,
+                deductions=deductions,
+                final_amount=final_amt,
                 cleared_at=cleared_date,
                 status=req.status.value,
                 refund_status=refund_st,

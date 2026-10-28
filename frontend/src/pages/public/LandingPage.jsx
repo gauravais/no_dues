@@ -247,7 +247,7 @@ export function LandingPage() {
                         Aman Gupta
                       </span>
                       <span className="text-xs font-mono text-zinc-500">
-                        (DEMO2026006)
+                        (Sample: 2024CS042)
                       </span>
                     </div>
                     <span className="text-xs text-zinc-500 block">
@@ -428,7 +428,7 @@ export function LandingPage() {
                 <div className="col-span-2 space-y-2">
                   <div>
                     <span className="text-[10px] text-zinc-400 uppercase tracking-wide block">Recipient</span>
-                    <span className="font-semibold text-zinc-900">Aarav Sharma (DEMO2026001)</span>
+                    <span className="font-semibold text-zinc-900">Aarav Sharma (Sample: 2024CS001)</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-zinc-400 uppercase tracking-wide block">Programme & Dept</span>

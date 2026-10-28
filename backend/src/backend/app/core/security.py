@@ -66,3 +66,10 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
         return payload
     except (jwt.PyJWTError, ValueError):
         return None
+
+
+def normalize_email(value: str | None) -> str:
+    """Normalize email address by stripping whitespace and lowercasing."""
+    if not value:
+        return ""
+    return str(value).strip().lower()

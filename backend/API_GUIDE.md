@@ -117,14 +117,19 @@ flowchart TD
 ### Department Officers (`/department`)
 | Method | Path | Allowed Roles | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/department/queue` | `dept_officer` | Returns pending approval tasks for the officer's assigned department. |
+| `GET` | `/department/queue` | `dept_officer` | Returns pending approval tasks for officer's assigned department. Supports `status` and `search` (by student name or registration number). |
 | `POST` | `/department/approvals/{id}/decision` | `dept_officer` | Submits approval or rejection (with required remarks) for an approval line. |
+
+### Departments Directory (`/departments`)
+| Method | Path | Allowed Roles | Description |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/departments` | Authenticated | Lists all active academic and service university departments (`id`, `name`, `kind`, `applicability`). |
 
 ### Chairperson / HoD (`/hod`)
 | Method | Path | Allowed Roles | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/hod/queue` | `hod` | Returns clearance requests waiting in `HOD_REVIEW` for the Chairperson's department. |
-| `GET` | `/hod/requests/{id}` | `hod` | Retrieves full student clearance dossier and all department sign-offs. |
+| `GET` | `/hod/requests/{id}` | `hod` | Retrieves full student clearance dossier, department sign-offs with `decided_by_name`, and `certificate_code` if cleared. |
 | `POST` | `/hod/requests/{id}/decision` | `hod` | Approves clearance (issuing certificate number) or rejects it with remarks. |
 
 ### Public Verification (`/verify`)
@@ -135,17 +140,18 @@ flowchart TD
 ### Registrar / Accounts (`/registrar`)
 | Method | Path | Allowed Roles | Description |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/registrar/queue` | `registrar_accounts` | Paginated queue of requests in `CLEARED` status. |
+| `GET` | `/registrar/queue` | `registrar_accounts` | Paginated queue of requests. Supports `status=CLEARED` (default) and `status=REFUND_VERIFIED`, returning `deductions` and `final_amount`. |
 | `POST` | `/registrar/requests/{id}/verify-refund` | `registrar_accounts` | Enters deductions (`0 <= deductions <= deposit`), sets `final_amount`, status to `REFUND_VERIFIED`. |
 | `POST` | `/registrar/requests/{id}/mark-processed` | `registrar_accounts` | Records bank transaction reference (`payment_reference`), sets refund status to `PROCESSED`. |
 
 ### University Administration (`/admin`)
 | Method | Path | Allowed Roles | Description |
 | :--- | :--- | :--- | :--- |
-| `POST` | `/admin/roster/upload` | `admin` | Uploads student roster CSV; returns row-by-row created/updated/rejected report. |
+| `POST` | `/admin/roster/upload` | `admin` | Uploads student roster CSV; returns row-by-row created/updated/rejected report. Synchronizes updated emails to linked user accounts. |
 | `GET` | `/admin/roster` | `admin` | Paginated roster search by registration number, name, or email. |
-| `PATCH` | `/admin/roster/{id}` | `admin` | Updates hosteller status, deposit amount, address, or mobile. |
+| `PATCH` | `/admin/roster/{id}` | `admin` | Updates email, hosteller status, deposit amount, address, or mobile. Automatically syncs email to student user account in same transaction. |
 | `PUT` | `/admin/roster/{id}/assigned-departments` | `admin` | Replaces assigned laboratories / workshops for a student. |
+| `GET` | `/admin/users` | `admin` | Paginated user accounts directory with `role` and `search` query parameters. Includes `department_name` and `full_name`. Never returns password hashes. |
 | `POST` | `/admin/users` | `admin` | Provisions staff user (`dept_officer`, `hod`, `registrar_accounts`). Returns one-time temporary password. |
 | `POST` | `/admin/users/{id}/reset-password` | `admin` | Generates a new one-time temporary password for a user. |
 | `PATCH` | `/admin/users/{id}/active` | `admin` | Activates/deactivates user (admin cannot deactivate themselves). |
@@ -154,18 +160,24 @@ flowchart TD
 
 ## 5. Seeded Demo Accounts
 
-All seeded accounts use password: **`SeedPass@123`**
+All seeded demo accounts are generated via `backend/scripts/seed_synthetic.py`. Default passwords are never published in documentation; they are derived from the `SEED_DEFAULT_PASSWORD` environment variable in `backend/.env`.
 
 | Role | Email Address | Display Name / Department |
 |---|---|---|
 | **Admin** | `admin@example.edu` | System Administrator (Demo) |
-| **Registrar / Accounts** | `registrar.accounts@example.edu` | Accounts Officer (Demo) |
+| **Registrar / Accounts** | `registrar.accounts@example.edu` | Accounts Officer (Demo) / R&S Branch |
 | **Chairperson (HoD) CS/IT** | `hod.csit@example.edu` | Chairperson Skill Department of CS/IT (Demo) |
-| **Library Officer** | `library.officer@example.edu` | Library Officer (Demo) |
-| **Hostel Warden** | `hostel.warden@example.edu` | Hostel (Boys/Girls) Officer (Demo) |
-| **Sports Officer** | `sports.officer@example.edu` | Sports Officer (Demo) |
-| **Student 1 (Day Scholar)** | `aarav.sharma@example.edu` | Aarav Sharma (DEMO2026001, B.Tech CE) |
-| **Student 2 (Hosteller)** | `priya.sharma@example.edu` | Priya Sharma (DEMO2026002, B.Tech CSE) |
+| **Library Officer** | `library.officer@example.edu` | Library Officer (Demo) / Central Library |
+| **Hostel Officer** | `hostel.officer@example.edu` | Hostel (Boys/Girls) Officer (Demo) |
+| **Sports Officer** | `sports.officer@example.edu` | Sports Officer (Demo) / Sports Section |
+| **Academic Officer (CS/IT)** | `officer.csit@example.edu` | Skill Department of CS/IT Officer (Demo) |
+| **Accounts Officer** | `accounts.officer@example.edu` | Account Section Officer (Demo) |
+| **Student 1 (Hosteller)** | `arjun.mehta@example.edu` | Arjun Mehta (DEMO2026001, B.Tech CE, Assigned: Lab-2, Lab-5) |
+| **Student 2 (Hosteller)** | `priya.sharma@example.edu` | Priya Sharma (DEMO2026002, MCA, Assigned: Lab-3) |
+| **Student 3 (Day Scholar)** | `sneha.patel@example.edu` | Sneha Patel (DEMO2026004, B.Voc Solar Tech) |
+| **Unregistered Student (Sign-Up Demo)** | `aman.gupta@example.edu` | Aman Gupta (DEMO2026006, test OTP sign-up flow) |
+
+> **Institutional Email Format Note**: Real university email formats (students: `<registration_number>@svsu.ac.in`, staff: `<name>@svsu.ac.in`) are accepted and normalized by the system during production registration and login, but they are not part of the demo dataset. All seeded demo accounts exist strictly on the `@example.edu` domain.
 
 ---
 
@@ -174,7 +186,7 @@ All seeded accounts use password: **`SeedPass@123`**
 Follow this checklist to demonstrate the full application lifecycle:
 
 - [ ] **Step 1: Check Bank Details**
-  - Log in as `aarav.sharma@example.edu`.
+  - Log in as `arjun.mehta@example.edu`.
   - Call `GET /student/bank-details` -> verify masked account `********0001`.
   - Update with `PUT /student/bank-details` -> verify masked response.
 - [ ] **Step 2: Submit Clearance Application**

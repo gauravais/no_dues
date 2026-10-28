@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { authApi } from '@/api/auth'
 
@@ -5,12 +6,7 @@ const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(() => {
-    const saved = localStorage.getItem('nodues_token')
-    if (saved) return saved
-    if (typeof window !== 'undefined' && window.location.search.includes('mock=student')) {
-      return 'dev-preview-token'
-    }
-    return null
+    return localStorage.getItem('nodues_token') || null
   })
   const [user, setUser] = useState(() => {
     try {
@@ -18,20 +14,6 @@ export function AuthProvider({ children }) {
       if (saved) return JSON.parse(saved)
     } catch {
       // ignore JSON errors
-    }
-    if (typeof window !== 'undefined' && window.location.search.includes('mock=student')) {
-      return {
-        id: 1,
-        email: 'aarav.sharma@example.edu',
-        full_name: 'Aarav Sharma (Demo Student)',
-        role: 'student',
-        roster: {
-          roll_number: '2024-BTECH-CSE-042',
-          registration_number: 'SVSU/2024/042',
-          programme_name: 'B.Tech Computer Science & Engineering',
-          faculty_name: 'Skill Faculty of Engineering & Technology',
-        },
-      }
     }
     return null
   })
@@ -59,10 +41,6 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let isMounted = true
-    if (token === 'dev-preview-token') {
-      setIsLoading(false)
-      return
-    }
     if (token) {
       authApi.me().then((profile) => {
         if (isMounted) {

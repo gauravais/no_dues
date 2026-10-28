@@ -55,6 +55,34 @@ export const adminApi = {
   },
 
   /**
+   * Fetch active university departments directory
+   */
+  async getDepartments() {
+    const response = await api.get('/departments')
+    return response.data
+  },
+
+  /**
+   * Fetch university user directory with role and search filters
+   * @param {Object} params
+   * @param {string} [params.search]
+   * @param {string} [params.role]
+   * @param {number} [params.limit=50]
+   * @param {number} [params.offset=0]
+   */
+  async getUsers({ search, role, limit = 50, offset = 0 } = {}) {
+    const params = { limit, offset }
+    if (search?.trim()) {
+      params.search = search.trim()
+    }
+    if (role && role !== 'ALL') {
+      params.role = role
+    }
+    const response = await api.get('/admin/users', { params })
+    return response.data
+  },
+
+  /**
    * Provision new staff user (dept_officer, hod, registrar_accounts)
    * @param {Object} data
    * @param {string} data.email

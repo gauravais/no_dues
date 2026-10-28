@@ -30,6 +30,7 @@ from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
 from backend.app.models.user import User, UserRole
 from backend.app.models.bank import BankDetail
 from backend.app.models.otp import SignupOTP
+from backend.app.core.security import normalize_email
 from pwdlib import PasswordHash
 from pwdlib.hashers.argon2 import Argon2Hasher
 
@@ -459,7 +460,7 @@ def seed(session) -> None:
 
     # Admin (no department)
     upsert_returning_id(session, User, ["email"], {
-        "email": "admin@example.edu",
+        "email": normalize_email("admin@example.edu"),
         "full_name": "System Administrator (Demo)",
         "password_hash": pw_hash,
         "role": UserRole.admin,
@@ -472,7 +473,7 @@ def seed(session) -> None:
     # Registrar/Accounts — attached to R&S Branch
     rs_branch_id = service_dept_ids["R&S Branch"]
     upsert_returning_id(session, User, ["email"], {
-        "email": "registrar.accounts@example.edu",
+        "email": normalize_email("registrar.accounts@example.edu"),
         "full_name": "Accounts Officer (Demo)",
         "password_hash": pw_hash,
         "role": UserRole.registrar_accounts,
@@ -489,7 +490,7 @@ def seed(session) -> None:
             print(f"  WARN: service dept '{dept_name}' not found, skipping", file=sys.stderr)
             continue
         upsert_returning_id(session, User, ["email"], {
-            "email": officer_email,
+            "email": normalize_email(officer_email),
             "full_name": f"{dept_name} Officer (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.dept_officer,
@@ -510,7 +511,7 @@ def seed(session) -> None:
         )
         email = f"{slug}.officer@example.edu"
         upsert_returning_id(session, User, ["email"], {
-            "email": email,
+            "email": normalize_email(email),
             "full_name": f"{dept_name} In-Charge (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.dept_officer,
@@ -524,7 +525,7 @@ def seed(session) -> None:
     for dept_name, dept_id in academic_dept_ids.items():
         slug = DEPT_SLUG[dept_name]
         upsert_returning_id(session, User, ["email"], {
-            "email": f"officer.{slug}@example.edu",
+            "email": normalize_email(f"officer.{slug}@example.edu"),
             "full_name": f"{dept_name} Officer (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.dept_officer,
@@ -534,7 +535,7 @@ def seed(session) -> None:
             "created_at": now,
         })
         upsert_returning_id(session, User, ["email"], {
-            "email": f"hod.{slug}@example.edu",
+            "email": normalize_email(f"hod.{slug}@example.edu"),
             "full_name": f"Chairperson {dept_name} (Demo)",
             "password_hash": pw_hash,
             "role": UserRole.hod,
@@ -563,7 +564,7 @@ def seed(session) -> None:
         roster_id = upsert_returning_id(session, StudentRoster, ["registration_number"], {
             "registration_number": s["registration_number"],
             "name": s["name"],
-            "email": s["email"],
+            "email": normalize_email(s["email"]),
             "mobile": s["mobile"],
             "address": s["address"],
             "programme_id": prog_id,
@@ -584,7 +585,7 @@ def seed(session) -> None:
 
         # Student user (email same as roster email — unique on users table)
         upsert_returning_id(session, User, ["email"], {
-            "email": s["email"],
+            "email": normalize_email(s["email"]),
             "full_name": s["name"],
             "password_hash": pw_hash,
             "role": UserRole.student,
@@ -620,7 +621,7 @@ def seed(session) -> None:
         roster_id = upsert_returning_id(session, StudentRoster, ["registration_number"], {
             "registration_number": s["registration_number"],
             "name": s["name"],
-            "email": s["email"],
+            "email": normalize_email(s["email"]),
             "mobile": s["mobile"],
             "address": s["address"],
             "programme_id": prog_id,

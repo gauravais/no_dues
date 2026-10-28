@@ -13,6 +13,7 @@ from backend.app.core.security import (
     hash_otp,
     verify_otp,
     create_access_token,
+    normalize_email,
 )
 from backend.app.models.user import User, UserRole
 from backend.app.models.roster import StudentRoster
@@ -50,7 +51,7 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 )
 def request_signup_otp(body: SignupOTPRequest, db: SessionDep) -> SignupOTPResponse:
     reg_num = body.registration_number.strip().upper()
-    email_clean = str(body.email).strip().lower()
+    email_clean = normalize_email(body.email)
 
     # 1. Check email domain against ALLOWED_EMAIL_DOMAINS
     domain = email_clean.split("@")[-1] if "@" in email_clean else ""
@@ -72,7 +73,7 @@ def request_signup_otp(body: SignupOTPRequest, db: SessionDep) -> SignupOTPRespo
         )
 
     # 3. Verify email matches roster email
-    if roster.email.strip().lower() != email_clean:
+    if normalize_email(roster.email) != email_clean:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email address does not match the official roster record for this registration number.",
@@ -188,10 +189,12 @@ def verify_signup_otp(body: SignupVerifyRequest, db: SessionDep) -> TokenRespons
         select(StudentRoster).where(func.upper(StudentRoster.registration_number) == reg_num)
     ).scalar_one()
 
+    roster_email_clean = normalize_email(roster.email)
+
     # Check for duplicate user
     existing_user = db.execute(
         select(User).where(
-            (func.lower(User.email) == roster.email.lower()) | (User.roster_id == roster.id)
+            (func.lower(User.email) == roster_email_clean) | (User.roster_id == roster.id)
         )
     ).scalar_one_or_none()
 
@@ -206,7 +209,7 @@ def verify_signup_otp(body: SignupVerifyRequest, db: SessionDep) -> TokenRespons
 
     # Create student User
     user = User(
-        email=roster.email.strip().lower(),
+        email=roster_email_clean,
         full_name=roster.name,
         password_hash=hash_password(body.password),
         role=UserRole.student,
@@ -241,7 +244,7 @@ def login_access_token(
     db: SessionDep,
     form_data: OAuth2PasswordRequestForm = Depends(),
 ) -> TokenResponse:
-    email_clean = form_data.username.strip().lower()
+    email_clean = normalize_email(form_data.username)
 
     user = db.execute(
         select(User).where(func.lower(User.email) == email_clean)

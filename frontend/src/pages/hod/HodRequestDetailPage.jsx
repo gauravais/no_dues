@@ -41,6 +41,8 @@ import {
   History,
   ShieldCheck,
   Award,
+  ExternalLink,
+  Copy,
 } from 'lucide-react'
 
 export function HodRequestDetailPage() {
@@ -249,14 +251,55 @@ export function HodRequestDetailPage() {
 
         {/* Approved Success Banner with Certificate Info */}
         {(approvedSuccessData || detail.status === 'CLEARED' || detail.status === 'REFUND_VERIFIED') && (
-          <div className="p-5 rounded-xl border border-emerald-200 bg-emerald-50/70 text-xs text-emerald-950 space-y-2">
+          <div className="p-5 rounded-xl border border-emerald-200 bg-emerald-50/70 text-xs text-emerald-950 space-y-3">
             <div className="flex items-center gap-2 font-semibold text-emerald-900 text-sm">
               <Award className="w-5 h-5 text-emerald-600" />
               <span>Clearance Formally Approved & Certificate Issued</span>
             </div>
             <p className="leading-relaxed text-emerald-900/90 text-xs">
-              All departmental obligations have been cleared. The student may now download their official university certificate with secure QR verification code from their portal.
+              All departmental obligations have been cleared. The official university certificate has been generated and is available for tamper-proof public verification.
             </p>
+
+            {(detail.certificate_code || approvedSuccessData?.certificate_code) && (
+              <div className="p-3.5 rounded-lg bg-white border border-emerald-300 shadow-2xs space-y-1.5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
+                      Certificate Verification Code
+                    </span>
+                    <span className="font-mono text-xs sm:text-sm font-bold text-zinc-900 select-all">
+                      {detail.certificate_code || approvedSuccessData?.certificate_code}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const code = detail.certificate_code || approvedSuccessData?.certificate_code
+                        navigator.clipboard.writeText(code)
+                        toast.success('Certificate code copied to clipboard!')
+                      }}
+                      className="h-7 px-2.5 text-[11px] gap-1 border-emerald-200 text-emerald-800 hover:bg-emerald-50"
+                    >
+                      <Copy className="w-3 h-3" />
+                      Copy Code
+                    </Button>
+                    <Link
+                      to={`/verify/${detail.certificate_code || approvedSuccessData?.certificate_code}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2 ml-1"
+                    >
+                      Verify Publicly
+                      <ExternalLink className="w-3 h-3" />
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="p-2.5 rounded-lg bg-white/80 border border-emerald-200 text-[11px] text-zinc-600 flex items-center justify-between">
               <span>Workflow Stage: <strong>{detail.status}</strong></span>
               <span className="text-emerald-700 font-mono text-[10px]">Security Deposit Ready for Refund</span>
@@ -348,10 +391,16 @@ export function HodRequestDetailPage() {
                       {app.decided_at ? new Date(app.decided_at).toLocaleString() : '—'}
                     </TableCell>
 
-                    <TableCell className="py-3.5 text-right pr-6 text-xs text-zinc-400 italic">
-                      <span title="Individual officer usernames are securely omitted by backend API contract">
-                        Department Officer
-                      </span>
+                    <TableCell className="py-3.5 text-right pr-6 text-xs">
+                      {app.decided_by_name ? (
+                        <span className="font-semibold text-zinc-900 block">
+                          {app.decided_by_name}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-400 italic">
+                          {app.status === 'PENDING' ? 'Pending Review' : 'Department Officer'}
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

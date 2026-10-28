@@ -1,6 +1,6 @@
 """Department officer endpoints: reviewing clearance queue and rendering approval decisions."""
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import joinedload
 
 from backend.app.api.deps import SessionDep, require_roles
@@ -48,6 +48,7 @@ def get_department_queue(
     db: SessionDep,
     current_user: User = Depends(require_officer),
     approval_status: ApprovalStatus | None = Query(None, alias="status", description="Filter by approval status"),
+    search: str | None = Query(None, description="Search by student name or registration number"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> DepartmentQueueResponse:
@@ -67,6 +68,15 @@ def get_department_queue(
 
     if approval_status is not None:
         base_query = base_query.where(DepartmentApproval.status == approval_status)
+
+    if search and search.strip():
+        search_term = f"%{search.strip()}%"
+        base_query = base_query.where(
+            or_(
+                StudentRoster.name.ilike(search_term),
+                StudentRoster.registration_number.ilike(search_term),
+            )
+        )
 
     # Count total
     count_query = select(func.count()).select_from(base_query.subquery())
@@ -147,6 +157,7 @@ def decide_approval_endpoint(
             status=approval.status,
             remarks=approval.remarks,
             decided_at=approval.decided_at,
+            decided_by_name=current_user.full_name or current_user.email,
             resubmission_count=approval.resubmission_count,
         )
     except WorkflowNotFoundError as e:

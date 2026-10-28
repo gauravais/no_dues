@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { departmentApi } from '@/api/department'
 import { useAuth } from '@/auth/AuthContext'
@@ -27,6 +27,7 @@ import {
   Search,
   RotateCw,
   AlertTriangle,
+  AlertCircle,
   History,
   Clock,
   ShieldCheck,
@@ -40,6 +41,7 @@ export function OfficerQueuePage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(25)
   const [searchTerm, setSearchTerm] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
 
   // Decision Modal State
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -50,37 +52,37 @@ export function OfficerQueuePage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [conflictError, setConflictError] = useState(null)
 
-  // Fetch queue
+  // Debounce search term to drive server-side filtering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm)
+      setPageIndex(0)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchTerm])
+
+  // Fetch queue with server-side status, search, and pagination
   const {
     data: queueResponse,
     isLoading,
+    isError,
+    error,
     isRefetching,
     refetch,
   } = useQuery({
-    queryKey: ['department', 'queue', statusTab, pageIndex, pageSize],
+    queryKey: ['department', 'queue', statusTab, pageIndex, pageSize, debouncedSearch],
     queryFn: async () => {
       return await departmentApi.getQueue({
         status: statusTab === 'ALL' ? undefined : statusTab,
+        search: debouncedSearch.trim() || undefined,
         limit: pageSize,
         offset: pageIndex * pageSize,
       })
     },
   })
 
-  const rawItems = useMemo(() => queueResponse?.items || [], [queueResponse?.items])
+  const items = useMemo(() => queueResponse?.items || [], [queueResponse?.items])
   const totalItems = queueResponse?.total || 0
-
-  // Client-side search filtering (API does not support search query parameter)
-  const filteredItems = useMemo(() => {
-    if (!searchTerm.trim()) return rawItems
-    const term = searchTerm.toLowerCase().trim()
-    return rawItems.filter(
-      (item) =>
-        item.student_name?.toLowerCase().includes(term) ||
-        item.registration_number?.toLowerCase().includes(term) ||
-        item.programme_name?.toLowerCase().includes(term)
-    )
-  }, [rawItems, searchTerm])
 
   const openDecisionModal = (item) => {
     setSelectedItem(item)
@@ -330,6 +332,25 @@ export function OfficerQueuePage() {
           </div>
         </div>
 
+        {/* API Error State with Retry Button */}
+        {isError && (
+          <div className="rounded-xl border border-destructive/20 bg-destructive/5 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-destructive">
+            <div className="flex items-center gap-2 text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>Failed to load clearance queue: {error?.response?.data?.detail || error?.message || 'Server connection error'}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              className="border-destructive/30 hover:bg-destructive/10 text-xs shrink-0"
+            >
+              <RotateCw className="w-3.5 h-3.5 mr-1.5" />
+              Retry
+            </Button>
+          </div>
+        )}
+
         {/* Toolbar: Search input */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           <div className="relative w-full sm:w-80">
@@ -342,9 +363,9 @@ export function OfficerQueuePage() {
               className="pl-9 h-9 text-xs bg-white border-border"
             />
           </div>
-          {searchTerm && (
+          {debouncedSearch && (
             <span className="text-[11px] text-zinc-500 self-center">
-              Filtered <span className="font-mono font-medium text-zinc-800">{filteredItems.length}</span> of {rawItems.length} loaded records
+              Found <span className="font-mono font-medium text-zinc-800">{totalItems}</span> matching student{totalItems !== 1 ? 's' : ''}
             </span>
           )}
         </div>
@@ -352,7 +373,7 @@ export function OfficerQueuePage() {
         {/* DataTable */}
         <DataTable
           columns={columns}
-          data={filteredItems}
+          data={items}
           isLoading={isLoading}
           manualPagination={true}
           totalItems={totalItems}
