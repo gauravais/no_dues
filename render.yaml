@@ -46,7 +46,7 @@ services:
       - key: FRONTEND_BASE_URL
         sync: false
 
-  - type: static
+  - type: static_site
     name: nodues-frontend
     buildCommand: cd frontend && npm ci && npm run build
     staticPublishPath: frontend/dist
