@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { studentApi } from '@/api/student'
+import { departmentApi } from '@/api/department'
 import { useAuth } from '@/auth/AuthContext'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { AppShell } from '@/components/AppShell'
@@ -10,6 +12,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
@@ -33,6 +36,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { toast } from 'sonner'
 import {
   Landmark,
@@ -43,11 +53,19 @@ import {
   AlertTriangle,
   History,
   ShieldAlert,
+  PlusCircle,
+  Building2,
+  FlaskConical,
+  ArrowRight,
+  Info,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react'
 
 export function StudentDashboard() {
   useDocumentTitle('Student Clearance')
   const { user } = useAuth()
+  const navigate = useNavigate()
 
   // State for Bank Details modal
   const [bankModalOpen, setBankModalOpen] = useState(false)
@@ -67,10 +85,22 @@ export function StudentDashboard() {
   const [hodResubmitOpen, setHodResubmitOpen] = useState(false)
   const [hodResubmitSubmitting, setHodResubmitSubmitting] = useState(false)
 
-  // State for Apply submitting
-  const [applySubmitting, setApplySubmitting] = useState(false)
+  // State for "Add More" modals
+  const [addOfficeOpen, setAddOfficeOpen] = useState(false)
+  const [selectedOfficeId, setSelectedOfficeId] = useState('')
+  const [addOfficeSubmitting, setAddOfficeSubmitting] = useState(false)
+
+  const [addLabsOpen, setAddLabsOpen] = useState(false)
+  const [selectedLabIds, setSelectedLabIds] = useState([])
+  const [addLabsSubmitting, setAddLabsSubmitting] = useState(false)
+
   const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState(new Date())
+
+  // State for Cancel Request dialog
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelSubmitting, setCancelSubmitting] = useState(false)
 
   // 1. Fetch Bank Details
   const {
@@ -112,7 +142,21 @@ export function StudentDashboard() {
         throw err
       }
     },
-    refetchInterval: 30000, // 30s live polling
+    refetchInterval: 30000,
+  })
+
+  // 3. Fetch Assigned-Only Departments for "Add Office"
+  const { data: assignedOnlyDepts = [] } = useQuery({
+    queryKey: ['departments', 'assigned-only'],
+    queryFn: () => departmentApi.getAssignedOnlyDepartments(),
+    enabled: addOfficeOpen,
+  })
+
+  // 4. Fetch Lab Catalog for "Add Lab Subjects"
+  const { data: labCatalogData } = useQuery({
+    queryKey: ['student', 'lab-catalog'],
+    queryFn: () => studentApi.getLabCatalog(),
+    enabled: addLabsOpen,
   })
 
   // Pre-fill holder name when bank details dialog opens
@@ -122,7 +166,7 @@ export function StudentDashboard() {
         accountHolderName: bankDetails.account_holder_name || user?.full_name || '',
         ifscCode: bankDetails.ifsc_code || '',
         bankAddress: bankDetails.bank_address || '',
-        accountNumber: '', // never echo full account number
+        accountNumber: '',
       })
     } else if (user?.full_name) {
       setBankForm((prev) => ({ ...prev, accountHolderName: user.full_name }))
@@ -145,7 +189,7 @@ export function StudentDashboard() {
     }
 
     if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(cleanIfsc)) {
-      toast.error('IFSC code must match standard format: 4 letters, 0, then 6 alphanumeric characters (e.g. SBIN0001234).')
+      toast.error('IFSC code must match standard format: 4 letters, 0, then 6 alphanumeric characters.')
       return
     }
 
@@ -175,26 +219,6 @@ export function StudentDashboard() {
       toast.error(msg)
     } finally {
       setBankSubmitting(false)
-    }
-  }
-
-  // Handle Apply for Clearance
-  const handleApply = async () => {
-    if (!bankDetails) {
-      toast.error('Bank details are required before applying for clearance.')
-      return
-    }
-
-    setApplySubmitting(true)
-    try {
-      await studentApi.createRequest()
-      toast.success('Clearance application submitted! Departmental reviews dispatched.')
-      refetchRequest()
-    } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to submit clearance application.'
-      toast.error(msg)
-    } finally {
-      setApplySubmitting(false)
     }
   }
 
@@ -234,6 +258,48 @@ export function StudentDashboard() {
     }
   }
 
+  // Handle Add Department
+  const handleConfirmAddDepartment = async () => {
+    if (!selectedOfficeId || !currentRequest) return
+
+    setAddOfficeSubmitting(true)
+    try {
+      await studentApi.addDepartment(currentRequest.id, Number(selectedOfficeId))
+      toast.success('Office added to clearance dossier successfully.')
+      setAddOfficeOpen(false)
+      setSelectedOfficeId('')
+      refetchRequest()
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to add office to request.'
+      toast.error(msg)
+    } finally {
+      setAddOfficeSubmitting(false)
+    }
+  }
+
+  // Handle Add Lab Courses
+  const handleConfirmAddLabs = async () => {
+    if (!selectedLabIds.length || !currentRequest) return
+
+    setAddLabsSubmitting(true)
+    try {
+      await studentApi.declareLabCourses(currentRequest.id, selectedLabIds)
+      toast.success('Lab subjects added successfully.')
+      setAddLabsOpen(false)
+      setSelectedLabIds([])
+      refetchRequest()
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        (err.response?.status === 404 || err.response?.status === 405
+          ? 'Backend endpoint POST /student/requests/{id}/lab-courses is not available (reported as API gap).'
+          : 'Failed to add lab courses.')
+      toast.error(msg)
+    } finally {
+      setAddLabsSubmitting(false)
+    }
+  }
+
   // Handle PDF Certificate Download as Blob with Bearer token
   const handleDownloadCertificate = async () => {
     if (!currentRequest) return
@@ -258,6 +324,29 @@ export function StudentDashboard() {
     }
   }
 
+  const handleCancelRequest = async (e) => {
+    e?.preventDefault?.()
+    if (!cancelReason.trim()) {
+      toast.error('A reason for cancellation is mandatory.')
+      return
+    }
+    if (!currentRequest) return
+
+    setCancelSubmitting(true)
+    try {
+      await studentApi.cancelRequest(currentRequest.id, cancelReason.trim())
+      toast.success('Clearance request cancelled successfully.')
+      setCancelDialogOpen(false)
+      setCancelReason('')
+      refetchRequest()
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to cancel request.'
+      toast.error(msg)
+    } finally {
+      setCancelSubmitting(false)
+    }
+  }
+
   // Progress calculations
   const approvals = currentRequest?.approvals || []
   const approvedCount = approvals.filter((a) => a.status === 'APPROVED').length
@@ -265,11 +354,33 @@ export function StudentDashboard() {
   const progressPercent = totalDepts > 0 ? Math.round((approvedCount / totalDepts) * 100) : 0
   const hasRejectedDepts = approvals.some((a) => a.status === 'REJECTED')
 
+  // Student can cancel ONLY while every approval is still PENDING
+  const canCancel =
+    currentRequest &&
+    currentRequest.status !== 'CANCELLED' &&
+    currentRequest.status !== 'CLEARED' &&
+    currentRequest.status !== 'REFUND_VERIFIED' &&
+    approvals.length > 0 &&
+    approvals.every((a) => a.status === 'PENDING')
+
   // HoD rejection banner condition: ACTION_NEEDED + hod_remarks + no department is rejected
   const showHodBanner =
     currentRequest?.status === 'ACTION_NEEDED' &&
     currentRequest?.hod_remarks &&
     !hasRejectedDepts
+
+  // Can show "Add more" panel: when request is active and not CLEARED or REFUND_VERIFIED or CANCELLED
+  const canAddMore =
+    currentRequest &&
+    currentRequest.status !== 'CLEARED' &&
+    currentRequest.status !== 'REFUND_VERIFIED' &&
+    currentRequest.status !== 'CANCELLED'
+
+  // Filter out departments already on the request for the "Add Office" select
+  const existingDeptIds = new Set(approvals.map((a) => a.department_id))
+  const availableToAddOffices = assignedOnlyDepts.filter(
+    (dept) => !existingDeptIds.has(dept.id)
+  )
 
   return (
     <AppShell>
@@ -319,7 +430,9 @@ export function StudentDashboard() {
               <div>
                 <p className="font-semibold text-zinc-900 text-xs sm:text-sm">Unable to load clearance data</p>
                 <p className="text-xs text-zinc-600 mt-0.5">
-                  {requestErrorObj?.response?.data?.detail || bankErrorObj?.response?.data?.detail || 'Could not communicate with the university clearance service.'}
+                  {requestErrorObj?.response?.data?.detail ||
+                    bankErrorObj?.response?.data?.detail ||
+                    'Could not communicate with the university clearance service.'}
                 </p>
               </div>
             </div>
@@ -379,7 +492,7 @@ export function StudentDashboard() {
                   Department Progress
                 </span>
                 <div className="text-lg font-bold font-mono text-zinc-900 pt-0.5">
-                  {approvedCount} / {totalDepts || 10} Approved
+                  {approvedCount} / {totalDepts || 0} Approved
                 </div>
                 <Progress value={progressPercent} className="h-1.5 bg-zinc-100 mt-1" />
               </div>
@@ -414,9 +527,9 @@ export function StudentDashboard() {
                 </span>
                 <div className="text-xs font-medium text-zinc-800 leading-snug">
                   {!bankDetails
-                    ? 'Register your bank account'
+                    ? 'Register bank details or start application'
                     : !currentRequest
-                    ? 'Ready to submit application'
+                    ? 'Submit your clearance declarations'
                     : hasRejectedDepts
                     ? 'Resolve dues with flagged department'
                     : showHodBanner
@@ -463,6 +576,94 @@ export function StudentDashboard() {
               </Alert>
             )}
 
+            {/* Refund Summary (when provided by API) */}
+            {Boolean(
+              currentRequest?.refund_status ||
+              (currentRequest?.deposit_amount !== null && currentRequest?.deposit_amount !== undefined) ||
+              currentRequest?.refund
+            ) && (
+              <Card className="border-border bg-white shadow-2xs">
+                <CardHeader className="p-5 pb-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Landmark className="w-4 h-4 text-zinc-700" />
+                      <CardTitle className="text-sm font-bold text-zinc-950">
+                        Security Deposit Refund Summary
+                      </CardTitle>
+                    </div>
+                    {currentRequest.refund_status && (
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] uppercase font-mono tracking-wider ${
+                          currentRequest.refund_status === 'PROCESSED'
+                            ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : currentRequest.refund_status === 'VERIFIED'
+                            ? 'bg-blue-50 text-blue-800 border-blue-200'
+                            : 'bg-amber-50 text-amber-800 border-amber-200'
+                        }`}
+                      >
+                        Refund: {currentRequest.refund_status.replace(/_/g, ' ')}
+                      </Badge>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="p-5 pt-0 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                    <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                      <span className="text-[11px] text-zinc-500 block">Original Deposit</span>
+                      <span className="text-sm font-bold font-mono text-zinc-900">
+                        ₹{currentRequest.deposit_amount ?? currentRequest.refund?.security_deposit_amount ?? '0.00'}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                      <span className="text-[11px] text-zinc-500 block">Deductions Applied</span>
+                      <span className="text-sm font-bold font-mono text-rose-600">
+                        -₹{currentRequest.deductions ?? currentRequest.refund?.deductions ?? '0.00'}
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-emerald-50/60 border border-emerald-200">
+                      <span className="text-[11px] text-emerald-800 font-semibold block">Net Refund Amount</span>
+                      <span className="text-sm font-bold font-mono text-emerald-700">
+                        ₹{currentRequest.final_amount ?? currentRequest.refund?.final_amount ?? '0.00'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {currentRequest.payment_reference && (
+                    <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div>
+                          <span className="font-semibold text-zinc-900 block">
+                            Bank Disbursement Processed
+                          </span>
+                          <span className="text-[11px] text-zinc-500">
+                            Transferred to registered bank account {bankDetails?.account_number ? `(${bankDetails.account_number})` : ''}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 font-mono text-xs bg-white px-2.5 py-1 rounded border border-zinc-200 text-zinc-800">
+                        <span className="text-zinc-400 font-sans text-[10px] uppercase font-semibold">UTR / Ref:</span>
+                        <span className="font-bold">{currentRequest.payment_reference}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {!currentRequest.payment_reference && currentRequest.refund_status === 'VERIFIED' && (
+                    <p className="text-[11px] text-zinc-500 italic">
+                      Deductions verified by Accounts Branch. Electronic bank transfer is queued for disbursement.
+                    </p>
+                  )}
+
+                  {!currentRequest.payment_reference && currentRequest.refund_status === 'PENDING_VERIFICATION' && (
+                    <p className="text-[11px] text-zinc-500 italic">
+                      Clearance complete. Accounts Branch is currently auditing library/hostel records against deposit ledger.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+
             {/* Application Card (When Not Submitted) OR Step Timeline (When Submitted) */}
             {!currentRequest ? (
               <Card className="border-border bg-white shadow-card">
@@ -476,7 +677,7 @@ export function StudentDashboard() {
                         Apply for Digital No-Dues Clearance
                       </CardTitle>
                       <CardDescription className="text-xs">
-                        Initiate concurrent departmental reviews across all 10 university service and academic offices.
+                        Declare your residence status, lab subjects, and applicable offices using the step-by-step wizard.
                       </CardDescription>
                     </div>
                   </div>
@@ -484,49 +685,35 @@ export function StudentDashboard() {
 
                 <CardContent className="p-6 pt-0 space-y-4 text-xs text-zinc-600">
                   <p className="leading-relaxed">
-                    By submitting, your request is instantly delivered to the <strong>Central Library</strong>,{' '}
-                    <strong>Sports Department</strong>, <strong>Hostel Office</strong>,{' '}
-                    <strong>Computer Centre</strong>, <strong>General Branch</strong>,{' '}
-                    <strong>Dean Student Welfare</strong>, <strong>N.S.S.</strong>,{' '}
-                    <strong>R&S Branch</strong>, <strong>IIC</strong>, and your <strong>Academic Department</strong>.
+                    Under the updated university clearance workflow, your clearance reviews are determined by your own declarations:
+                    hostel status, specific lab subjects used in your academic department, and any additional assigned-only offices.
                   </p>
 
                   {!bankDetails && (
                     <Alert className="bg-amber-50 border-amber-200 text-amber-900 py-3">
                       <AlertTriangle className="h-4 w-4 text-amber-800" />
-                      <AlertTitle className="text-xs font-semibold">Prerequisite Required</AlertTitle>
+                      <AlertTitle className="text-xs font-semibold">Bank Details Prerequisite</AlertTitle>
                       <AlertDescription className="text-xs mt-0.5">
-                        You must register your bank account details before applying so that security deposit refunds can be processed.
+                        You can register your bank account directly in Step 1 of the application wizard, or register it now.
                       </AlertDescription>
                     </Alert>
                   )}
                 </CardContent>
 
-                <CardFooter className="p-6 pt-0 border-t border-zinc-100 flex items-center justify-between">
+                <CardFooter className="p-6 pt-0 border-t border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <span className="text-xs text-zinc-400">
-                    Shri Vishwakarma Skill University
+                    Shri Vishwakarma Skill University • Digital Clearance
                   </span>
                   <div className="flex items-center gap-2">
-                    {!bankDetails ? (
-                      <Button
-                        size="sm"
-                        onClick={() => setBankModalOpen(true)}
-                        className="bg-primary text-primary-foreground text-xs gap-1.5"
-                      >
-                        <Landmark className="w-3.5 h-3.5" />
-                        Register Bank Details First
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        onClick={handleApply}
-                        disabled={applySubmitting}
-                        className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-2 font-semibold shadow-xs"
-                      >
-                        <Send className="w-3.5 h-3.5" />
-                        {applySubmitting ? 'Submitting Application...' : 'Apply for Clearance'}
-                      </Button>
-                    )}
+                    <Button
+                      size="sm"
+                      onClick={() => navigate('/student/apply')}
+                      className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-2 font-semibold shadow-xs"
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      Apply for Clearance
+                      <ArrowRight className="w-3.5 h-3.5 ml-0.5" />
+                    </Button>
                   </div>
                 </CardFooter>
               </Card>
@@ -545,27 +732,105 @@ export function StudentDashboard() {
                       </CardDescription>
                     </div>
 
-                    {(currentRequest.status === 'CLEARED' ||
-                      currentRequest.status === 'REFUND_VERIFIED') && (
-                      <Button
-                        onClick={handleDownloadCertificate}
-                        disabled={downloadingPdf}
-                        className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-1.5 h-9 font-semibold shadow-xs"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        {downloadingPdf ? 'Generating PDF...' : 'Download Certificate (PDF)'}
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {canCancel && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setCancelDialogOpen(true)}
+                          className="text-xs text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 h-8 gap-1.5"
+                        >
+                          <XCircle className="w-3.5 h-3.5" />
+                          Cancel Request
+                        </Button>
+                      )}
+
+                      {(currentRequest.status === 'CLEARED' ||
+                        currentRequest.status === 'REFUND_VERIFIED') && (
+                        <Button
+                          onClick={handleDownloadCertificate}
+                          disabled={downloadingPdf}
+                          className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-1.5 h-9 font-semibold shadow-xs"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          {downloadingPdf ? 'Generating PDF...' : 'Download Certificate (PDF)'}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </CardHeader>
 
                 <CardContent className="p-6 pt-0 space-y-4">
+                  {currentRequest.status === 'CANCELLED' && (
+                    <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status="CANCELLED" />
+                          <span className="text-xs font-semibold text-zinc-900">Application Cancelled</span>
+                        </div>
+                        <p className="text-xs text-zinc-600 leading-relaxed">
+                          This clearance application was cancelled before any office decided. You can apply again anytime with updated declarations.
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        onClick={() => navigate('/student/apply')}
+                        className="bg-black text-white hover:bg-zinc-800 text-xs font-semibold h-8 gap-1.5 shrink-0"
+                      >
+                        Apply Again
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Button>
+                    </div>
+                  )}
+
                   <StepTimeline
                     status={currentRequest.status}
                     approvals={currentRequest.approvals}
                     hodRemarks={currentRequest.hod_remarks}
                   />
                 </CardContent>
+              </Card>
+            )}
+
+            {/* "Add More" Panel (When request is active and not CLEARED/REFUND_VERIFIED) */}
+            {canAddMore && (
+              <Card className="border-border bg-zinc-50/50 shadow-2xs">
+                <CardHeader className="p-5 pb-3">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <PlusCircle className="w-4 h-4 text-zinc-900" />
+                        <CardTitle className="text-sm font-bold text-zinc-950">
+                          Add Further Offices or Lab Subjects
+                        </CardTitle>
+                      </div>
+                      <CardDescription className="text-xs mt-1 text-zinc-600">
+                        Adding an office asks only that office; a request already with the HoD returns to department review.
+                      </CardDescription>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAddOfficeOpen(true)}
+                        className="text-xs gap-1.5 h-8 bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-100"
+                      >
+                        <Building2 className="w-3.5 h-3.5" />
+                        Add Office
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAddLabsOpen(true)}
+                        className="text-xs gap-1.5 h-8 bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-100"
+                      >
+                        <FlaskConical className="w-3.5 h-3.5" />
+                        Add Lab Subjects
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
               </Card>
             )}
 
@@ -623,6 +888,34 @@ export function StudentDashboard() {
                           </CardHeader>
 
                           <CardContent className="p-5 pt-0 space-y-3 text-xs">
+                            {/* Department Added Notice (e.g. Added by your department: reason) */}
+                            {item.added_reason && (
+                              <div className="rounded-md bg-amber-50/80 border border-amber-200 p-2 text-[11px] text-amber-950">
+                                <span className="font-semibold">Added by your department:</span>{' '}
+                                {item.added_reason}
+                              </div>
+                            )}
+
+                            {/* Declared Subjects if returned by API */}
+                            {item.declared_subjects && item.declared_subjects.length > 0 && (
+                              <div className="space-y-1">
+                                <span className="text-[11px] font-semibold text-zinc-600 block">
+                                  Declared Subjects:
+                                </span>
+                                <div className="flex flex-wrap gap-1">
+                                  {item.declared_subjects.map((sub, i) => (
+                                    <Badge
+                                      key={i}
+                                      variant="outline"
+                                      className="text-[10px] font-mono bg-zinc-50 border-zinc-200 text-zinc-700"
+                                    >
+                                      {typeof sub === 'string' ? sub : sub.course_code || sub.course_name}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
                             {/* Current Remarks */}
                             {item.remarks && (
                               <div
@@ -698,6 +991,166 @@ export function StudentDashboard() {
           </>
         )}
       </div>
+
+      {/* Dialog: Add Office */}
+      <Dialog open={addOfficeOpen} onOpenChange={setAddOfficeOpen}>
+        <DialogContent className="sm:max-w-md bg-white p-6">
+          <DialogHeader className="pb-3">
+            <DialogTitle className="font-heading font-bold text-base">
+              Add Office to Clearance Dossier
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Select an assigned-only university office to add to your clearance reviews.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="officeSelect" className="text-xs font-semibold text-zinc-800">
+                Office / Department
+              </Label>
+              {availableToAddOffices.length === 0 ? (
+                <p className="text-xs text-zinc-500 italic py-2">
+                  All available assigned-only offices have already been added to your request.
+                </p>
+              ) : (
+                <Select value={selectedOfficeId} onValueChange={setSelectedOfficeId}>
+                  <SelectTrigger id="officeSelect" className="text-xs">
+                    <SelectValue placeholder="Select an office to add..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableToAddOffices.map((dept) => (
+                      <SelectItem key={dept.id} value={String(dept.id)} className="text-xs">
+                        {dept.name} ({dept.code})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            <div className="rounded-lg bg-zinc-50 border border-zinc-200 p-2.5 text-xs text-zinc-600 flex items-start gap-2">
+              <Info className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
+              <p className="text-[11px] leading-relaxed">
+                Adding an office asks only that office; a request already with the HoD returns to department review.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0 pt-3 border-t border-zinc-100">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setAddOfficeOpen(false)}
+              className="text-xs h-9"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!selectedOfficeId || addOfficeSubmitting}
+              onClick={handleConfirmAddDepartment}
+              className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
+            >
+              {addOfficeSubmitting ? 'Adding...' : 'Add Office'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Add Lab Subjects */}
+      <Dialog open={addLabsOpen} onOpenChange={setAddLabsOpen}>
+        <DialogContent className="sm:max-w-lg bg-white p-6 max-h-[85vh] flex flex-col">
+          <DialogHeader className="pb-3">
+            <DialogTitle className="font-heading font-bold text-base">
+              Add Lab & Workshop Subjects
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Select additional lab courses to add to your clearance declarations.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2 overflow-y-auto flex-1 pr-1 text-xs">
+            <div className="rounded-lg bg-zinc-50 border border-zinc-200 p-2.5 text-zinc-600 flex items-start gap-2">
+              <Info className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
+              <p className="text-[11px] leading-relaxed">
+                Adding lab subjects links them to your academic department review.
+              </p>
+            </div>
+
+            {(!labCatalogData || !labCatalogData.courses || labCatalogData.courses.length === 0) ? (
+              <p className="text-xs text-zinc-500 italic py-4 text-center">
+                No lab courses cataloged for your academic programme.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {labCatalogData.courses.map((course) => {
+                  const isChecked = selectedLabIds.includes(course.id)
+                  return (
+                    <label
+                      key={course.id}
+                      className={`flex items-start gap-2.5 p-2.5 rounded-lg border transition-all cursor-pointer ${
+                        isChecked
+                          ? 'border-zinc-950 bg-zinc-50'
+                          : 'border-zinc-200 hover:border-zinc-300'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedLabIds([...selectedLabIds, course.id])
+                          } else {
+                            setSelectedLabIds(selectedLabIds.filter((id) => id !== course.id))
+                          }
+                        }}
+                        className="mt-0.5 h-4 w-4 rounded border-zinc-300 text-black focus:ring-black accent-zinc-900 cursor-pointer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-semibold text-zinc-900">
+                            {course.course_code}
+                          </span>
+                          <span className="font-medium text-zinc-800 truncate">
+                            {course.course_name}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-zinc-500 mt-0.5">
+                          Signing Office: {course.signing_department_name} • Sem {course.semester}
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0 pt-3 border-t border-zinc-100 shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setAddLabsOpen(false)}
+              className="text-xs h-9"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              disabled={selectedLabIds.length === 0 || addLabsSubmitting}
+              onClick={handleConfirmAddLabs}
+              className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
+            >
+              {addLabsSubmitting ? 'Adding...' : `Add Selected (${selectedLabIds.length})`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Dialog: Register / Update Bank Details */}
       <Dialog open={bankModalOpen} onOpenChange={setBankModalOpen}>
@@ -863,6 +1316,57 @@ export function StudentDashboard() {
               className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
             >
               {hodResubmitSubmitting ? 'Resubmitting...' : 'Confirm Resubmission to HoD'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {/* AlertDialog: Cancel Clearance Application */}
+      <AlertDialog
+        open={cancelDialogOpen}
+        onOpenChange={setCancelDialogOpen}
+      >
+        <AlertDialogContent className="bg-white p-6 max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950">
+              Cancel Clearance Application?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs space-y-2 text-zinc-600">
+              <p>
+                You can cancel only before any office has decided. Once cancelled, this application is closed.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="py-2 space-y-1.5">
+            <Label htmlFor="studentCancelReason" className="text-xs font-semibold text-zinc-800">
+              Reason for Cancellation <span className="text-destructive">*</span>
+            </Label>
+            <Textarea
+              id="studentCancelReason"
+              placeholder="e.g. Need to re-declare lab subjects or correct declarations"
+              rows={3}
+              className="text-xs resize-none"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              required
+            />
+          </div>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel
+              disabled={cancelSubmitting}
+              onClick={() => {
+                setCancelDialogOpen(false)
+                setCancelReason('')
+              }}
+              className="text-xs h-9"
+            >
+              Keep Application
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleCancelRequest}
+              disabled={cancelSubmitting || !cancelReason.trim()}
+              className="bg-red-600 text-white hover:bg-red-700 text-xs h-9 font-semibold"
+            >
+              {cancelSubmitting ? 'Cancelling...' : 'Confirm Cancellation'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

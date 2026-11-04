@@ -95,6 +95,7 @@ export function AuthProvider({ children }) {
     logout,
     refreshProfile: fetchProfile,
     role: user?.role,
+    mustChangePassword: Boolean(user?.must_change_password),
     isStudent: user?.role === 'student',
     isOfficer: user?.role === 'dept_officer',
     isHod: user?.role === 'hod',

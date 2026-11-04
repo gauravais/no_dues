@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 
 /**
- * Shared DataTable component built on top of TanStack Table and shadcn/ui.
+ * Shared accessible data table component.
  *
  * @param {Object} props
  * @param {Array} props.columns - TanStack column definitions

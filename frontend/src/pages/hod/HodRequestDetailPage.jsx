@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { hodApi } from '@/api/hod'
 import { useAuth } from '@/auth/AuthContext'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
@@ -29,6 +29,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import {
   ChevronLeft,
@@ -43,6 +51,10 @@ import {
   Award,
   ExternalLink,
   Copy,
+  Building2,
+  PlusCircle,
+  FileText,
+  Info,
 } from 'lucide-react'
 
 export function HodRequestDetailPage() {
@@ -50,6 +62,7 @@ export function HodRequestDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const queryClient = useQueryClient()
 
   const [decision, setDecision] = useState('APPROVED')
   const [remarks, setRemarks] = useState('')
@@ -57,6 +70,12 @@ export function HodRequestDetailPage() {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [approvedSuccessData, setApprovedSuccessData] = useState(null)
+
+  // Add Office Dialog State
+  const [addOfficeOpen, setAddOfficeOpen] = useState(false)
+  const [selectedDeptId, setSelectedDeptId] = useState('')
+  const [addReason, setAddReason] = useState('')
+  const [addReasonError, setAddReasonError] = useState('')
 
   // Fetch full request detail
   const {
@@ -74,6 +93,47 @@ export function HodRequestDetailPage() {
   })
 
   const departmentName = user?.department_name || 'Academic Department'
+
+  // Add Department Mutation
+  const addDeptMutation = useMutation({
+    mutationFn: ({ departmentId, reason }) =>
+      hodApi.addDepartment(Number(id), { departmentId, reason }),
+    onSuccess: (newItem) => {
+      toast.success(`Added ${newItem.department_name} to clearance dossier.`)
+      setAddOfficeOpen(false)
+      setSelectedDeptId('')
+      setAddReason('')
+      setAddReasonError('')
+      queryClient.invalidateQueries({ queryKey: ['hod', 'request', id] })
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.detail || 'Failed to add office to request.'
+      toast.error(msg)
+    },
+  })
+
+  const handleOpenAddOffice = () => {
+    setSelectedDeptId(detail?.can_add_departments?.[0]?.id ? String(detail.can_add_departments[0].id) : '')
+    setAddReason('')
+    setAddReasonError('')
+    setAddOfficeOpen(true)
+  }
+
+  const handleAddOfficeSubmit = (e) => {
+    e.preventDefault()
+    if (!selectedDeptId) {
+      toast.error('Please select an office to add.')
+      return
+    }
+    if (!addReason.trim()) {
+      setAddReasonError('A valid operational reason is strictly mandatory when adding an office.')
+      return
+    }
+    addDeptMutation.mutate({
+      departmentId: Number(selectedDeptId),
+      reason: addReason.trim(),
+    })
+  }
 
   const handleOpenConfirm = () => {
     if (decision === 'REJECTED' && !remarks.trim()) {
@@ -171,16 +231,29 @@ export function HodRequestDetailPage() {
     <AppShell>
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Navigation Breadcrumb */}
-        <div className="flex items-center gap-2 text-xs text-zinc-500">
-          <Link
-            to="/hod"
-            className="flex items-center gap-1 hover:text-zinc-900 transition-colors font-medium"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-            HoD Clearance Queue
-          </Link>
-          <span>/</span>
-          <span className="text-zinc-900 font-mono">Dossier #{detail.request_id}</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <Link
+              to="/hod"
+              className="flex items-center gap-1 hover:text-zinc-900 transition-colors font-medium"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" />
+              HoD Clearance Queue
+            </Link>
+            <span>/</span>
+            <span className="text-zinc-900 font-mono">Dossier #{detail.request_id}</span>
+          </div>
+
+          {detail.can_add_departments && detail.can_add_departments.length > 0 && (
+            <Button
+              size="sm"
+              onClick={handleOpenAddOffice}
+              className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-1.5 h-8 font-semibold shadow-xs"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              Add Office
+            </Button>
+          )}
         </div>
 
         {/* Student Dossier Header Card */}
@@ -233,6 +306,42 @@ export function HodRequestDetailPage() {
                 {detail.submitted_at ? new Date(detail.submitted_at).toLocaleString() : '—'}
               </span>
             </div>
+          </div>
+
+          {/* Student Declarations Section */}
+          <div className="pt-4 border-t border-zinc-100 space-y-3">
+            <div>
+              <span className="text-[11px] font-semibold text-zinc-900 block mb-1">
+                Declared Laboratory & Workshop Subjects:
+              </span>
+              {detail.declared_subjects && detail.declared_subjects.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {detail.declared_subjects.map((sub, i) => (
+                    <Badge
+                      key={i}
+                      variant="outline"
+                      className="font-mono text-xs bg-zinc-50 border-zinc-200 text-zinc-800 py-1"
+                    >
+                      {sub}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-zinc-400 italic">
+                  Student declared zero specific laboratory subjects for this clearance.
+                </p>
+              )}
+            </div>
+
+            {detail.others_note && (
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 text-xs text-zinc-700 space-y-1">
+                <div className="flex items-center gap-1.5 font-semibold text-zinc-900 text-[11px]">
+                  <FileText className="w-3.5 h-3.5 text-zinc-500" />
+                  <span>Student Declaration Note (Special Facilities / Notes):</span>
+                </div>
+                <p className="leading-relaxed font-mono text-[11px]">{detail.others_note}</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -342,8 +451,11 @@ export function HodRequestDetailPage() {
                   <TableHead className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
                     Decision Timestamp
                   </TableHead>
-                  <TableHead className="text-xs font-semibold uppercase tracking-wider text-zinc-600 text-right pr-6">
+                  <TableHead className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
                     Decided By
+                  </TableHead>
+                  <TableHead className="text-xs font-semibold uppercase tracking-wider text-zinc-600 text-right pr-6">
+                    Added By / Reason
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -391,7 +503,7 @@ export function HodRequestDetailPage() {
                       {app.decided_at ? new Date(app.decided_at).toLocaleString() : '—'}
                     </TableCell>
 
-                    <TableCell className="py-3.5 text-right pr-6 text-xs">
+                    <TableCell className="py-3.5 text-xs">
                       {app.decided_by_name ? (
                         <span className="font-semibold text-zinc-900 block">
                           {app.decided_by_name}
@@ -400,6 +512,19 @@ export function HodRequestDetailPage() {
                         <span className="text-zinc-400 italic">
                           {app.status === 'PENDING' ? 'Pending Review' : 'Department Officer'}
                         </span>
+                      )}
+                    </TableCell>
+
+                    <TableCell className="py-3.5 pr-6 text-right text-xs">
+                      {app.added_reason || app.added_by_name ? (
+                        <div className="p-2 rounded bg-amber-50/80 border border-amber-200/80 text-[11px] text-amber-950 inline-block text-left">
+                          <span className="font-semibold block">
+                            Added by {app.added_by_name || 'Academic Dept'}:
+                          </span>
+                          <span className="italic">"{app.added_reason}"</span>
+                        </div>
+                      ) : (
+                        <span className="text-zinc-400 text-[11px]">System standard</span>
                       )}
                     </TableCell>
                   </TableRow>
@@ -557,6 +682,91 @@ export function HodRequestDetailPage() {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        {/* Add Office Dialog */}
+        <Dialog open={addOfficeOpen} onOpenChange={setAddOfficeOpen}>
+          <DialogContent className="sm:max-w-md bg-white p-6">
+            <form onSubmit={handleAddOfficeSubmit}>
+              <DialogHeader className="pb-3">
+                <DialogTitle className="font-heading font-bold text-base flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-zinc-900" />
+                  Add Clearance Office
+                </DialogTitle>
+                <DialogDescription className="text-xs">
+                  Add an additional service or lab facility to this student's clearance dossier.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="p-3 mb-3 rounded-lg bg-zinc-50 border border-zinc-200 text-xs text-zinc-600 flex items-start gap-2">
+                <Info className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
+                <p className="text-[11px] leading-relaxed">
+                  Adding an office asks only that office; a request already with the HoD returns to department review.
+                </p>
+              </div>
+
+              <div className="space-y-3.5 py-1 text-xs">
+                <div className="space-y-1.5">
+                  <Label htmlFor="hodAddOfficeSelect" className="text-xs font-semibold text-zinc-800">
+                    Select University Facility / Office *
+                  </Label>
+                  <select
+                    id="hodAddOfficeSelect"
+                    value={selectedDeptId}
+                    onChange={(e) => setSelectedDeptId(e.target.value)}
+                    className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    required
+                  >
+                    {(detail?.can_add_departments || []).map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} ({d.kind})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="hodAddReason" className="text-xs font-semibold text-zinc-800">
+                    Operational Reason for Addition *
+                  </Label>
+                  <Textarea
+                    id="hodAddReason"
+                    rows={3}
+                    placeholder="Explain why this student requires review from this facility..."
+                    value={addReason}
+                    onChange={(e) => {
+                      setAddReason(e.target.value)
+                      if (addReasonError) setAddReasonError('')
+                    }}
+                    className={`text-xs resize-none ${addReasonError ? 'border-rose-500' : ''}`}
+                    required
+                  />
+                  {addReasonError && (
+                    <p className="text-[11px] text-rose-600 font-medium">{addReasonError}</p>
+                  )}
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2 sm:gap-0 pt-4 border-t border-zinc-100">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAddOfficeOpen(false)}
+                  className="text-xs h-9"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={addDeptMutation.isPending || !selectedDeptId}
+                  className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
+                >
+                  {addDeptMutation.isPending ? 'Adding Office...' : 'Confirm Addition'}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
     </AppShell>
   )

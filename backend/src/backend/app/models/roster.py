@@ -19,6 +19,9 @@ class StudentRoster(Base):
     programme_id = Column(Integer, ForeignKey("programmes.id"), nullable=False)
     is_hosteller = Column(Boolean, nullable=False, default=False)
     security_deposit_amount = Column(Numeric(10, 2), nullable=False, default=0)
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    source = Column(String(50), nullable=True)
+    updated_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (
         Index("ix_student_roster_registration_number", "registration_number"),
@@ -29,7 +32,9 @@ class StudentRoster(Base):
     assigned_departments = relationship(
         "RosterAssignedDepartment", back_populates="roster_entry"
     )
-    user = relationship("User", back_populates="roster_entry", uselist=False)
+    user = relationship("User", back_populates="roster_entry", uselist=False, foreign_keys="User.roster_id")
+    created_by_user = relationship("User", foreign_keys=[created_by_user_id])
+    updated_by_user = relationship("User", foreign_keys=[updated_by_user_id])
     bank_detail = relationship("BankDetail", back_populates="roster_entry", uselist=False)
     clearance_requests = relationship("ClearanceRequest", back_populates="roster_entry")
 

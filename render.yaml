@@ -1,0 +1,72 @@
+services:
+  - type: web
+    name: nodues-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    healthCheckPath: /health/live
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: ENABLE_DOCS
+        value: "false"
+      - key: MAIL_CONSOLE_ONLY
+        value: "false"
+      - key: EMAIL_BACKEND
+        value: brevo
+      - key: ALLOWED_EMAIL_DOMAINS
+        value: svsu.ac.in
+      - key: GOOGLE_ALLOWED_DOMAINS
+        value: svsu.ac.in
+      - key: AUTH_PASSWORD_LOGIN_FOR_STUDENTS
+        value: "false"
+      - key: TRUSTED_CLIENT_IP_HEADER
+        value: True-Client-IP
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: BANK_DATA_KEY
+        sync: false
+      - key: JOB_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: FRONTEND_BASE_URL
+        sync: false
+
+  - type: static
+    name: nodues-frontend
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Content-Security-Policy
+        value: "default-src 'self'; script-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/client; style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style; frame-src https://accounts.google.com/gsi/; connect-src 'self' https://accounts.google.com/gsi/ REPLACE_WITH_BACKEND_ORIGIN; img-src 'self' data: https://*.googleusercontent.com;"
+    envVars:
+      - key: VITE_API_BASE_URL
+        sync: false

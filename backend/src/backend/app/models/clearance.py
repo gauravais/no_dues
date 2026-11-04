@@ -2,11 +2,19 @@
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, Integer, String, ForeignKey, Enum as SAEnum,
-    DateTime, CheckConstraint, UniqueConstraint, Index, text
+    Column, Integer, String, Boolean, ForeignKey, Enum as SAEnum,
+    DateTime, CheckConstraint, UniqueConstraint, Index, Table, text
 )
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
+
+
+request_lab_courses = Table(
+    "request_lab_courses",
+    Base.metadata,
+    Column("request_id", Integer, ForeignKey("clearance_requests.id", ondelete="CASCADE"), primary_key=True),
+    Column("lab_course_id", Integer, ForeignKey("lab_courses.id", ondelete="RESTRICT"), primary_key=True),
+)
 
 
 class ClearanceStatus(str, enum.Enum):
@@ -15,6 +23,7 @@ class ClearanceStatus(str, enum.Enum):
     HOD_REVIEW = "HOD_REVIEW"
     CLEARED = "CLEARED"
     REFUND_VERIFIED = "REFUND_VERIFIED"
+    CANCELLED = "CANCELLED"
 
 
 class ApprovalStatus(str, enum.Enum):
@@ -42,6 +51,8 @@ class ClearanceRequest(Base):
     hod_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     hod_decided_at = Column(DateTime(timezone=True), nullable=True)
     hod_remarks = Column(String(1000), nullable=True)
+    declared_is_hosteller = Column(Boolean, nullable=False, default=False)
+    others_note = Column(String(1000), nullable=True)
 
     __table_args__ = (
         Index("ix_clearance_requests_roster_id", "roster_id"),
@@ -50,7 +61,7 @@ class ClearanceRequest(Base):
             "uq_clearance_requests_active_roster",
             "roster_id",
             unique=True,
-            postgresql_where=text("status <> 'REFUND_VERIFIED'"),
+            postgresql_where=text("status NOT IN ('REFUND_VERIFIED', 'CANCELLED')"),
         ),
     )
 
@@ -62,6 +73,11 @@ class ClearanceRequest(Base):
     approvals = relationship("DepartmentApproval", back_populates="request")
     certificate = relationship("Certificate", back_populates="request", uselist=False)
     refund = relationship("Refund", back_populates="request", uselist=False)
+    declared_lab_courses = relationship(
+        "LabCourse",
+        secondary=request_lab_courses,
+        backref="clearance_requests",
+    )
 
 
 class DepartmentApproval(Base):
@@ -78,6 +94,8 @@ class DepartmentApproval(Base):
     previous_remarks = Column(String(1000), nullable=True)
     decided_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     decided_at = Column(DateTime(timezone=True), nullable=True)
+    added_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    added_reason = Column(String(500), nullable=True)
     resubmission_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False,
                         default=lambda: datetime.now(timezone.utc))
@@ -101,4 +119,8 @@ class DepartmentApproval(Base):
     decided_by_user = relationship(
         "User", back_populates="decided_approvals",
         foreign_keys=[decided_by]
+    )
+    added_by_user = relationship(
+        "User",
+        foreign_keys=[added_by_user_id],
     )

@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/auth/AuthContext'
 import { authApi } from '@/api/auth'
+import { useAuthConfig } from '@/hooks/useAuthConfig'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,28 +18,34 @@ import {
   ArrowRight,
   ArrowLeft,
   Info,
-  Sparkles,
   CreditCard,
-  ChevronDown,
 } from 'lucide-react'
-
-const DEMO_ROSTER_STUDENTS = import.meta.env.DEV
-  ? [
-      { reg: 'DEMO2026006', email: 'aman.gupta@example.edu', name: 'Aman Gupta' },
-      { reg: 'DEMO2026007', email: 'neha.verma@example.edu', name: 'Neha Verma' },
-    ]
-  : []
 
 export function SignupPage() {
   useDocumentTitle('Student Registration')
   const { login } = useAuth()
   const navigate = useNavigate()
+  const { data: authConfig, isLoading: configLoading } = useAuthConfig()
+
+  // If OTP signup is disabled, redirect to login with explanatory notice
+  useEffect(() => {
+    if (!configLoading && authConfig && authConfig.otp_signup_enabled === false) {
+      toast.info('Students now sign in with their university Google account. No separate sign-up is needed.')
+      navigate('/login', {
+        replace: true,
+        state: {
+          notice: 'Students now sign in with their university Google account. No separate sign-up is needed.',
+        },
+      })
+    }
+  }, [authConfig, configLoading, navigate])
 
   // Step 1: Request OTP state
   const [step, setStep] = useState(1)
   const [registrationNumber, setRegistrationNumber] = useState('')
   const [email, setEmail] = useState('')
   const [devOtpHint, setDevOtpHint] = useState(null)
+  const [serverNotice, setServerNotice] = useState('')
 
   // Step 2: Verify state
   const [otpCode, setOtpCode] = useState('')
@@ -46,7 +53,28 @@ export function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState('')
 
   const [loading, setLoading] = useState(false)
+  const [resending, setResending] = useState(false)
+  const [resendCooldown, setResendCooldown] = useState(0)
+  const [rateLimitCooldown, setRateLimitCooldown] = useState(0)
   const [errors, setErrors] = useState({})
+
+  // Cooldown timer for Resend code
+  useEffect(() => {
+    if (resendCooldown <= 0) return
+    const timer = setInterval(() => {
+      setResendCooldown((prev) => (prev > 1 ? prev - 1 : 0))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [resendCooldown])
+
+  // Cooldown timer for 429 rate limit
+  useEffect(() => {
+    if (rateLimitCooldown <= 0) return
+    const timer = setInterval(() => {
+      setRateLimitCooldown((prev) => (prev > 1 ? prev - 1 : 0))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [rateLimitCooldown])
 
   const validateStep1 = () => {
     const errs = {}
@@ -69,21 +97,14 @@ export function SignupPage() {
     }
     if (!password) {
       errs.password = 'Password is required.'
-    } else if (password.length < 8) {
-      errs.password = 'Password must be at least 8 characters.'
+    } else if (password.length < 10) {
+      errs.password = 'Password must be at least 10 characters.'
     }
     if (password !== confirmPassword) {
       errs.confirmPassword = 'Passwords do not match.'
     }
     setErrors(errs)
     return Object.keys(errs).length === 0
-  }
-
-  const handleRosterQuickFill = (reg, mail) => {
-    setRegistrationNumber(reg)
-    setEmail(mail)
-    setErrors({})
-    toast.info(`Pre-filled student ${reg}`)
   }
 
   const handleRequestOtp = async (e) => {
@@ -96,18 +117,87 @@ export function SignupPage() {
     setLoading(true)
     try {
       const data = await authApi.requestOtp(cleanReg, cleanEmail)
-      toast.success(data.detail || data.message || 'OTP dispatched to email.')
-      if (import.meta.env.DEV && data.dev_otp) {
+      const message =
+        data?.message ||
+        data?.detail ||
+        'If the details match our records, a code has been sent to your university email.'
+      setServerNotice(message)
+      toast.success(message)
+      if (import.meta.env.DEV && data?.dev_otp) {
         setDevOtpHint(data.dev_otp)
         setOtpCode(data.dev_otp)
       }
       setStep(2)
+      setResendCooldown(60)
       setErrors({})
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to request OTP. Check registration number and email.'
-      toast.error(msg)
+      if (err.response?.status === 429) {
+        const retryHeader =
+          err.response?.headers?.['retry-after'] ||
+          err.response?.headers?.get?.('retry-after')
+        const seconds = Number(retryHeader) || 60
+        const minutes = Math.max(1, Math.ceil(seconds / 60))
+        const msg = `Too many attempts. Please try again in ${minutes} minute${
+          minutes > 1 ? 's' : ''
+        }.`
+        toast.error(msg)
+        setRateLimitCooldown(seconds)
+      } else {
+        // ALWAYS advance to code step and display the generic notification to prevent account enumeration
+        const message =
+          err.response?.data?.message ||
+          'If the details match our records, a code has been sent to your university email.'
+        setServerNotice(message)
+        toast.info(message)
+        setStep(2)
+        setResendCooldown(60)
+        setErrors({})
+      }
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleResendCode = async () => {
+    if (resendCooldown > 0 || rateLimitCooldown > 0 || resending) return
+    const cleanReg = registrationNumber.trim().toUpperCase()
+    const cleanEmail = email.trim().toLowerCase()
+
+    setResending(true)
+    try {
+      const data = await authApi.requestOtp(cleanReg, cleanEmail)
+      const message =
+        data?.message ||
+        data?.detail ||
+        'If the details match our records, a code has been sent to your university email.'
+      setServerNotice(message)
+      toast.success(message)
+      if (import.meta.env.DEV && data?.dev_otp) {
+        setDevOtpHint(data.dev_otp)
+        setOtpCode(data.dev_otp)
+      }
+      setResendCooldown(60)
+    } catch (err) {
+      if (err.response?.status === 429) {
+        const retryHeader =
+          err.response?.headers?.['retry-after'] ||
+          err.response?.headers?.get?.('retry-after')
+        const seconds = Number(retryHeader) || 60
+        const minutes = Math.max(1, Math.ceil(seconds / 60))
+        const msg = `Too many attempts. Please try again in ${minutes} minute${
+          minutes > 1 ? 's' : ''
+        }.`
+        toast.error(msg)
+        setRateLimitCooldown(seconds)
+      } else {
+        const message =
+          'If the details match our records, a code has been sent to your university email.'
+        setServerNotice(message)
+        toast.info(message)
+        setResendCooldown(60)
+      }
+    } finally {
+      setResending(false)
     }
   }
 
@@ -130,11 +220,42 @@ export function SignupPage() {
       toast.success('Registration complete! Welcome to SVSU No-Dues.')
       navigate('/student', { replace: true })
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Verification failed. Please check OTP or password.'
-      toast.error(msg)
+      if (err.response?.status === 429) {
+        const retryHeader =
+          err.response?.headers?.['retry-after'] ||
+          err.response?.headers?.get?.('retry-after')
+        const seconds = Number(retryHeader) || 60
+        const minutes = Math.max(1, Math.ceil(seconds / 60))
+        toast.error(
+          `Too many attempts. Please try again in ${minutes} minute${
+            minutes > 1 ? 's' : ''
+          }.`
+        )
+        setRateLimitCooldown(seconds)
+      } else {
+        toast.error('Invalid or expired verification code.')
+        setErrors({ otpCode: 'Invalid or expired verification code.' })
+      }
     } finally {
       setLoading(false)
     }
+  }
+
+  if (!configLoading && authConfig && authConfig.otp_signup_enabled === false) {
+    return (
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6 font-sans">
+        <Card className="w-full max-w-md p-6 text-center space-y-4 bg-white border-border shadow-card">
+          <Info className="w-8 h-8 text-blue-600 mx-auto" />
+          <h2 className="font-heading font-bold text-lg text-zinc-900">Redirecting to Sign In</h2>
+          <p className="text-xs text-zinc-600 leading-relaxed font-medium">
+            Students now sign in with their university Google account. No separate sign-up is needed.
+          </p>
+          <Button asChild size="sm" className="bg-primary text-primary-foreground font-semibold">
+            <Link to="/login">Go to Sign In</Link>
+          </Button>
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -237,7 +358,7 @@ export function SignupPage() {
                       <UserCheck className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
                       <Input
                         id="regNum"
-                        placeholder="e.g. DEMO2026001"
+                        placeholder="e.g. 2024CS001"
                         className={`pl-9 font-mono uppercase text-sm ${errors.registrationNumber ? 'border-destructive ring-1 ring-destructive' : ''}`}
                         value={registrationNumber}
                         onChange={(e) => {
@@ -280,10 +401,14 @@ export function SignupPage() {
                   <Button
                     type="submit"
                     className="w-full bg-primary text-primary-foreground hover:bg-zinc-800 font-semibold text-sm h-10 mt-2 shadow-xs"
-                    disabled={loading}
+                    disabled={loading || rateLimitCooldown > 0}
                   >
-                    {loading ? 'Validating Roster...' : 'Request Verification OTP'}
-                    {!loading && <ArrowRight className="ml-2 h-4 w-4" />}
+                    {rateLimitCooldown > 0
+                      ? `Rate limit active (wait ${rateLimitCooldown}s)`
+                      : loading
+                      ? 'Validating Roster...'
+                      : 'Request Verification OTP'}
+                    {!loading && rateLimitCooldown <= 0 && <ArrowRight className="ml-2 h-4 w-4" />}
                   </Button>
                 </CardContent>
 
@@ -301,11 +426,22 @@ export function SignupPage() {
                 <CardHeader className="p-6 pb-4">
                   <CardTitle className="text-lg font-bold">Verify OTP & Password</CardTitle>
                   <CardDescription className="text-xs">
-                    Enter the 6-digit code dispatched for {email}.
+                    Enter the 6-digit verification code dispatched for {email}.
                   </CardDescription>
                 </CardHeader>
 
                 <CardContent className="p-6 pt-0 space-y-4">
+                  {/* Generic Dispatch Notification from Server */}
+                  {serverNotice && (
+                    <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg text-xs text-zinc-700 leading-relaxed">
+                      {serverNotice}
+                    </div>
+                  )}
+
+                  <p className="text-xs text-zinc-500">
+                    The code is sent to your university email. Check spam if you do not see it.
+                  </p>
+
                   {/* Dev OTP Hint Banner if present */}
                   {import.meta.env.DEV && devOtpHint && (
                     <Alert className="bg-amber-50 border-amber-200 text-amber-900 py-2.5">
@@ -319,9 +455,23 @@ export function SignupPage() {
 
                   {/* OTP Code */}
                   <div className="space-y-1.5">
-                    <Label htmlFor="otpCode" className="text-xs font-semibold text-zinc-800">
-                      6-Digit Verification Code
-                    </Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="otpCode" className="text-xs font-semibold text-zinc-800">
+                        6-Digit Verification Code
+                      </Label>
+                      <button
+                        type="button"
+                        onClick={handleResendCode}
+                        disabled={resendCooldown > 0 || rateLimitCooldown > 0 || resending}
+                        className="text-xs font-semibold text-zinc-900 hover:underline disabled:text-zinc-400 disabled:no-underline"
+                      >
+                        {resending
+                          ? 'Resending...'
+                          : resendCooldown > 0
+                          ? `Resend code (${resendCooldown}s)`
+                          : 'Resend code'}
+                      </button>
+                    </div>
                     <div className="relative">
                       <KeyRound className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
                       <Input
@@ -346,14 +496,14 @@ export function SignupPage() {
                   {/* Password */}
                   <div className="space-y-1.5">
                     <Label htmlFor="password" className="text-xs font-semibold text-zinc-800">
-                      Create Password (min 8 characters)
+                      Create Password (minimum 10 characters)
                     </Label>
                     <div className="relative">
                       <Lock className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
                       <Input
                         id="password"
                         type="password"
-                        placeholder="••••••••"
+                        placeholder="••••••••••"
                         className={`pl-9 text-sm ${errors.password ? 'border-destructive ring-1 ring-destructive' : ''}`}
                         value={password}
                         onChange={(e) => {
@@ -405,47 +555,19 @@ export function SignupPage() {
                     <Button
                       type="submit"
                       className="w-2/3 bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-10 font-semibold"
-                      disabled={loading}
+                      disabled={loading || rateLimitCooldown > 0}
                     >
-                      {loading ? 'Creating Account...' : 'Complete Signup'}
+                      {rateLimitCooldown > 0
+                        ? `Wait (${rateLimitCooldown}s)`
+                        : loading
+                        ? 'Creating Account...'
+                        : 'Complete Signup'}
                     </Button>
                   </div>
                 </CardContent>
               </form>
             )}
           </Card>
-
-          {/* Collapsible Demo Student Roster Helper (Development Only) */}
-          {import.meta.env.DEV && step === 1 && (
-            <details className="group rounded-xl border border-zinc-200 bg-white p-4 text-xs transition-all shadow-2xs">
-              <summary className="flex items-center justify-between cursor-pointer list-none font-semibold text-zinc-800 select-none">
-                <span className="flex items-center gap-2">
-                  <Sparkles className="w-3.5 h-3.5 text-zinc-600" />
-                  <span>Demo roster students (development only)</span>
-                </span>
-                <ChevronDown className="w-4 h-4 text-zinc-400 transition-transform duration-200 group-open:rotate-180" />
-              </summary>
-
-              <div className="pt-3 space-y-2 border-t border-zinc-100 mt-3">
-                <p className="text-[11px] text-zinc-500">
-                  Click any unprovisioned roster entry to pre-fill registration details:
-                </p>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {DEMO_ROSTER_STUDENTS.map((s) => (
-                    <button
-                      key={s.reg}
-                      type="button"
-                      onClick={() => handleRosterQuickFill(s.reg, s.email)}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md bg-zinc-50 border border-zinc-200 hover:border-black text-zinc-800"
-                    >
-                      <span className="font-semibold">{s.reg}</span>
-                      <span className="text-zinc-500 font-mono text-[10px]">({s.name})</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </details>
-          )}
         </div>
       </div>
     </div>

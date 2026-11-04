@@ -9,8 +9,9 @@ Comprehensive test suite for NoDues Backend:
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.orm import Session
+from backend.app.models.rate_limit import AuthRateLimit
 
 from backend.app.core.config import settings
 from backend.app.core.security import hash_password, hash_otp, create_access_token
@@ -489,17 +490,20 @@ def test_11_signup_full_flow_and_validations(client, db_session: Session):
     db_session.add(roster)
     db_session.commit()
 
-    # Unknown registration number -> 400
+    # Unknown registration number -> 200 with generic message (pilot anti-enumeration guard)
     res_unk = client.post("/auth/signup/request-otp", json={"registration_number": "UNKNOWN99", "email": "any@example.edu"})
-    assert res_unk.status_code == 400
+    assert res_unk.status_code == 200
+    assert "If the details match our records" in res_unk.json()["detail"]
 
-    # Wrong email for registration number -> 400
+    # Wrong email for registration number -> 200 with generic message
     res_wrong_email = client.post("/auth/signup/request-otp", json={"registration_number": "DEMO8888", "email": "wrong@example.edu"})
-    assert res_wrong_email.status_code == 400
+    assert res_wrong_email.status_code == 200
+    assert "If the details match our records" in res_wrong_email.json()["detail"]
 
-    # Disallowed email domain -> 400
+    # Disallowed email domain -> 200 with generic message
     res_disallowed = client.post("/auth/signup/request-otp", json={"registration_number": "DEMO8888", "email": "candidate@gmail.com"})
-    assert res_disallowed.status_code == 400
+    assert res_disallowed.status_code == 200
+    assert "If the details match our records" in res_disallowed.json()["detail"]
 
     # Request OTP successfully
     res_otp = client.post("/auth/signup/request-otp", json={"registration_number": "DEMO8888", "email": "candidate.student@example.edu"})
@@ -510,10 +514,10 @@ def test_11_signup_full_flow_and_validations(client, db_session: Session):
         select(SignupOTP).where(SignupOTP.registration_number == "DEMO8888")
     ).scalar_one()
 
-    # Wrong OTP -> 400
+    # Wrong OTP -> 400 with generic verification error
     res_wrong_otp = client.post("/auth/signup/verify", json={"registration_number": "DEMO8888", "otp": "000000", "password": "NewPassword@123"})
     assert res_wrong_otp.status_code == 400
-    assert "attempt(s) remaining" in res_wrong_otp.json()["detail"]
+    assert "Invalid or expired verification code" in res_wrong_otp.json()["detail"]
 
     # Test 5-attempt limit: submit wrong OTP 4 more times (total 5)
     for _ in range(4):
@@ -521,7 +525,7 @@ def test_11_signup_full_flow_and_validations(client, db_session: Session):
 
     res_exceeded = client.post("/auth/signup/verify", json={"registration_number": "DEMO8888", "otp": "000000", "password": "NewPassword@123"})
     assert res_exceeded.status_code == 400
-    assert "exceeded" in res_exceeded.json()["detail"]
+    assert "Invalid or expired verification code" in res_exceeded.json()["detail"]
 
     # Test expired OTP
     now = datetime.now(timezone.utc)
@@ -558,9 +562,12 @@ def test_11_signup_full_flow_and_validations(client, db_session: Session):
     assert res_verify.status_code == 201
     assert "access_token" in res_verify.json()
 
-    # Duplicate sign-up -> request-otp returns 409
+    # Duplicate sign-up -> request-otp returns 200 with generic message (anti-enumeration)
+    db_session.execute(delete(AuthRateLimit))
+    db_session.commit()
     res_dup = client.post("/auth/signup/request-otp", json={"registration_number": "DEMO8888", "email": "candidate.student@example.edu"})
-    assert res_dup.status_code == 409
+    assert res_dup.status_code == 200
+    assert "If the details match our records" in res_dup.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

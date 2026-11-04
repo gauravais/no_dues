@@ -18,8 +18,10 @@ def hash_password(password: str) -> str:
     return password_hasher.hash(password)
 
 
-def verify_password(plain_password: str, hashed_password: str) -> bool:
+def verify_password(plain_password: str, hashed_password: str | None) -> bool:
     """Verify a plaintext password against an Argon2 hash."""
+    if not hashed_password or not plain_password:
+        return False
     return password_hasher.verify(plain_password, hashed_password)
 
 

@@ -6,13 +6,35 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/auth/config": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Get Authentication Configuration",
+        "description": "Public configuration metadata for frontend authentication flows, including Google OAuth2 and OTP status.",
+        "operationId": "get_auth_config",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfigResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/auth/signup/request-otp": {
       "post": {
         "tags": [
           "Auth"
         ],
         "summary": "Request Student Signup OTP",
-        "description": "Initiates student self-registration. Validates that the registration number exists in the student roster, the provided email matches the roster email, the domain is allowed, and that the student has not already created an account. Dispatches a 6-digit OTP.",
+        "description": "Initiates student self-registration. Validates that the registration number exists in the student roster, the provided email matches the roster email, the domain is allowed, and that the student has not already created an account. Enforces rate limits and returns a generic message to prevent account enumeration.",
         "operationId": "request_signup_otp",
         "requestBody": {
           "content": {
@@ -35,18 +57,8 @@
               }
             }
           },
-          "400": {
-            "description": "Invalid registration number, mismatched email, or disallowed domain",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "User account already exists for this student",
+          "429": {
+            "description": "Too many OTP requests",
             "content": {
               "application/json": {
                 "schema": {
@@ -74,7 +86,7 @@
           "Auth"
         ],
         "summary": "Verify OTP and Create Student Account",
-        "description": "Verifies the received OTP, enforces maximum 5 attempts, validates password length (min 8 chars), creates the User record with student role linked to the roster entry, and returns an access token.",
+        "description": "Verifies the received OTP, enforces maximum 5 attempts, validates password length (min 10 chars), creates the User record with student role linked to the roster entry, and returns an access token.",
         "operationId": "verify_signup_otp",
         "requestBody": {
           "content": {
@@ -98,7 +110,7 @@
             }
           },
           "400": {
-            "description": "Invalid, expired, or exceeded attempts OTP, or password too short",
+            "description": "Invalid, expired verification code or password too short",
             "content": {
               "application/json": {
                 "schema": {
@@ -136,7 +148,7 @@
           "Auth"
         ],
         "summary": "User Login (OAuth2 Password Grant)",
-        "description": "Authenticates university students, department officers, HoDs, and administrators. Accepts form data where username is the user's email address. Returns a JWT Bearer access token.",
+        "description": "Authenticates university students, department officers, HoDs, and administrators. Enforces persistent rate limiting of 5 failed attempts per 15 minutes per email and IP address. Returns a JWT Bearer access token and indicates if password change is required.",
         "operationId": "login_access_token",
         "requestBody": {
           "content": {
@@ -169,6 +181,88 @@
               }
             }
           },
+          "429": {
+            "description": "Too many failed login attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/google": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Google OAuth2 Single Sign-On",
+        "description": "Authenticates university students, staff, and administrators via Google OAuth2 ID token credential. Verifies cryptographic signature, domain restriction, and student roster eligibility on first login. Enforces persistent rate limits on IP and failed attempts per email.",
+        "operationId": "google_auth_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid, expired, or unauthorized Google credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Account disabled, unregistered student, or sub mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed Google authentication attempts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -188,7 +282,7 @@
           "Auth"
         ],
         "summary": "Get Current User Profile",
-        "description": "Returns profile details for the authenticated user. If the user is a student, includes their academic roster summary, deposit amount, and securely masked bank account number.",
+        "description": "Returns profile details for the authenticated user. Accessible even if password change is required. If the user is a student, includes their academic roster summary and masked bank details.",
         "operationId": "get_my_profile",
         "responses": {
           "200": {
@@ -219,14 +313,100 @@
         ]
       }
     },
+    "/auth/change-password": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Change User Password",
+        "description": "Updates user password. Required when must_change_password flag is True (e.g. for initial admin-created accounts). Enforces current password verification, minimum 10 characters length, and disallows reusing the current password.",
+        "operationId": "change_user_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Change User Password"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Incorrect current password or new password validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
     "/student/requests": {
       "post": {
         "tags": [
           "Student"
         ],
         "summary": "Apply for No-Dues Clearance",
-        "description": "Student initiates a clearance application. The system automatically creates parallel clearance reviews for all applicable departments (always-applicable, hosteller if relevant, assigned labs/workshops, and their own academic department) and registers a refund entry. Only one active request is allowed.",
+        "description": "Student initiates a clearance application from their declarations. The system automatically creates parallel clearance reviews for all applicable departments (always-applicable, hosteller if declared, declared labs/workshops, and their own academic department) and registers a refund entry. Only one active request is allowed.",
         "operationId": "create_clearance_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StudentClearanceApply"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": "Successful Response",
@@ -239,7 +419,7 @@
             }
           },
           "400": {
-            "description": "Student profile or roster missing",
+            "description": "Student profile or roster missing, or bank details missing",
             "content": {
               "application/json": {
                 "schema": {
@@ -259,11 +439,21 @@
             }
           },
           "409": {
-            "description": "Student already has an active clearance request",
+            "description": "Student already has an active clearance request, or office lacks active officer",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -488,6 +678,199 @@
         }
       }
     },
+    "/student/requests/{request_id}/lab-courses": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Declare Additional Lab Subjects",
+        "description": "Student declares additional laboratory subjects while their clearance request is active. Any newly declared subject belonging to an unassigned lab office automatically triggers a pending clearance review.",
+        "operationId": "declare_additional_lab_courses",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeclareLabCoursesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid lab course list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Clearance request is already finalized or lab department lacks active officer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/student/requests/{request_id}/cancel": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Cancel Clearance Request",
+        "description": "Allows a student to cancel their clearance request provided all departmental approvals are still in PENDING status.",
+        "operationId": "student_cancel_clearance_request",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/StudentCancelRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot cancel: some approvals have already been decided or request finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-student roles or requests belonging to another student",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/student/bank-details": {
       "get": {
         "tags": [
@@ -677,6 +1060,161 @@
         }
       }
     },
+    "/student/lab-catalog": {
+      "get": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Get Available Lab Courses and Fallback Offices",
+        "description": "Returns active lab courses for the student's academic programme, plus all ASSIGNED_ONLY service departments.",
+        "operationId": "get_student_lab_catalog",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StudentLabCatalogResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Student roster profile not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-students",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Student programme not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/student/requests/{request_id}/departments": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Add Department to Active Clearance Request",
+        "description": "Adds an ASSIGNED_ONLY or applicable department to an active clearance request. Fails with 409 if department already added or has no active dealing officer.",
+        "operationId": "add_department_to_clearance_request",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddDepartmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentApprovalItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid department or request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-students",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request or department not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department already added, or has no active dealing officer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/department/queue": {
       "get": {
         "tags": [
@@ -708,6 +1246,24 @@
               "title": "Status"
             },
             "description": "Filter by approval status"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search by student name or registration number",
+              "title": "Search"
+            },
+            "description": "Search by student name or registration number"
           },
           {
             "name": "limit",
@@ -858,6 +1414,988 @@
           },
           "409": {
             "description": "Approval record has already been decided",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/requests/{request_id}/add-department": {
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Academic Officer Adds Office to Active Clearance Request",
+        "description": "Academic department officer adds an office to an active clearance request for a student enrolled under their department. Justification reason is strictly mandatory.",
+        "operationId": "academic_officer_add_department",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddOfficeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentApprovalItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Mandatory reason missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-academic officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request not found or not in officer's department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Target office already exists, has no active officer, or request finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/requests/{request_id}": {
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Department Officer Clearance Request Dossier",
+        "description": "Returns clearance request dossier. Academic officers of the student's department receive the full dossier (all departmental approvals and candidate offices to add). Service/non-academic officers whose office is on the request receive a scoped dossier containing student details, academic department, declared subjects for their own office, hostel status if they are the hostel office, others note if applicable, and their own approval record. Officers whose office is not on the request receive 404.",
+        "operationId": "get_department_request_detail",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HoDRequestDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Officer has no department assigned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request not found or office not on request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/requests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Academic Officer Cancel Clearance Request",
+        "description": "Allows academic department officers to cancel clearance requests of their own students with mandatory reason.",
+        "operationId": "department_cancel_clearance_request",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaffCancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid state (already cleared/verified) or missing reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-academic officers or requests outside officer's department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/roster/template.csv": {
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Download Academic Roster CSV Template",
+        "description": "Downloads a CSV template formatted for academic department student roster upload.",
+        "operationId": "get_department_roster_template_csv",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/department/roster/upload": {
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Upload Academic Department Roster CSV",
+        "description": "Academic department officer uploads student roster for their own programmes. Rows for programmes outside their department or foreign department students are strictly rejected. Returns a row-by-row status report.",
+        "operationId": "upload_department_roster_csv",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_department_roster_csv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RosterUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CSV file structure or missing headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/department/roster": {
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Add Student to Academic Roster",
+        "description": "Adds a single student to the roster for an academic programme in the officer's department.",
+        "operationId": "create_department_roster_student",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepartmentRosterCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentRosterItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid programme or email domain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Registration number or email already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "List Academic Department Roster",
+        "description": "Returns paginated student roster records belonging strictly to the officer's academic department.",
+        "operationId": "list_department_roster",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search by name, registration number, or email",
+              "title": "Search"
+            },
+            "description": "Search by name, registration number, or email"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Page limit",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page limit"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Page offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Page offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentRosterListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/roster/{id}": {
+      "patch": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Update Academic Department Roster Record",
+        "description": "Updates name, mobile, address, or email for a student in the officer's academic department. Returns 404 if student belongs to another department. If student already has an active user account, changing email is strictly refused with 409 Conflict.",
+        "operationId": "patch_department_roster_student",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DepartmentRosterPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentRosterItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Student not found in your academic department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email conflict or student already has active user account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/lab-courses/template.csv": {
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Download Lab Courses CSV Template",
+        "description": "Downloads a CSV template formatted for lab course catalog upload.",
+        "operationId": "get_department_lab_courses_template_csv",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/department/lab-courses": {
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "List Academic Department Lab Courses",
+        "description": "Returns all lab and workshop courses managed by the officer's academic department.",
+        "operationId": "list_department_lab_courses",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by active status",
+              "title": "Is Active"
+            },
+            "description": "Filter by active status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Page limit",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page limit"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Page offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Page offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Create Lab Course",
+        "description": "Creates a new lab course mapped to an ASSIGNED_ONLY service department (lab/workshop office).",
+        "operationId": "create_department_lab_course",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabCourseCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Assigned office is not an ASSIGNED_ONLY service department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lab course code already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/lab-courses/upload": {
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Upload Lab Courses CSV",
+        "description": "Bulk uploads lab courses for the officer's academic department from CSV.",
+        "operationId": "upload_department_lab_courses_csv",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_department_lab_courses_csv"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CSV file structure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/department/lab-courses/{id}": {
+      "patch": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Update Lab Course",
+        "description": "Updates a lab course's name, specialization, or active status.",
+        "operationId": "patch_department_lab_course",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabCoursePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Lab course not found in your academic department",
             "content": {
               "application/json": {
                 "schema": {
@@ -1096,6 +2634,104 @@
         }
       }
     },
+    "/hod/requests/{request_id}/add-department": {
+      "post": {
+        "tags": [
+          "HoD"
+        ],
+        "summary": "HoD Adds Office to Active Clearance Request",
+        "description": "Chairperson / HoD adds an office to an active clearance request for a student enrolled under their academic department. Justification reason is strictly mandatory.",
+        "operationId": "hod_add_department",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddOfficeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepartmentApprovalItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Mandatory reason missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-HoD roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request not found or not in HoD's department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Target office already exists, has no active officer, or request finalized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/verify/{certificate_code}": {
       "get": {
         "tags": [
@@ -1144,8 +2780,8 @@
         "tags": [
           "Registrar / Accounts"
         ],
-        "summary": "Get Cleared Requests for Refund",
-        "description": "Returns a paginated list of clearance requests currently in CLEARED status, awaiting security deposit reconciliation and refund verification by the university accounts branch.",
+        "summary": "Get Cleared or Refund-Verified Requests for Refund",
+        "description": "Returns a paginated list of clearance requests in CLEARED or REFUND_VERIFIED status, allowing the university accounts branch to verify refunds and record disbursement payment references.",
         "operationId": "get_registrar_queue",
         "security": [
           {
@@ -1153,6 +2789,18 @@
           }
         ],
         "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Filter by clearance status: CLEARED (default) or REFUND_VERIFIED",
+              "default": "CLEARED",
+              "title": "Status"
+            },
+            "description": "Filter by clearance status: CLEARED (default) or REFUND_VERIFIED"
+          },
           {
             "name": "limit",
             "in": "query",
@@ -1188,6 +2836,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RegistrarQueueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status parameter. Must be CLEARED or REFUND_VERIFIED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1370,6 +3028,162 @@
           },
           "404": {
             "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}": {
+      "get": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Get Clearance Request Details for Registrar",
+        "description": "Returns full request details including student provenance (who uploaded/added to roster), masked bank account details, and refund status.",
+        "operationId": "get_registrar_request_detail",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrarRequestDetailResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/reveal-bank-details": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Audited Reveal of Full Bank Account Number",
+        "description": "Returns plain, unmasked bank account details for a student whose clearance is CLEARED or REFUND_VERIFIED. Strictly restricted to registrar_accounts role, rate limited to 10 requests per minute per user, and logged in the audit trail without revealing the account number.",
+        "operationId": "reveal_student_bank_details",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevealBankDetailsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or bank details not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request is not in CLEARED or REFUND_VERIFIED status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (10 calls/min)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1732,15 +3546,20 @@
         "summary": "Create University Staff User",
         "description": "Provisions a new staff user (dept_officer, hod, or registrar_accounts). Department is mandatory for officers and HoDs. HoDs must be assigned to an academic department. Automatically generates a secure random temporary password and returns it ONCE in the response (never logged).",
         "operationId": "create_staff_user",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AdminCreateUserRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "201": {
@@ -1793,12 +3612,157 @@
               }
             }
           }
-        },
+        }
+      },
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List University Users Directory",
+        "description": "Retrieves a list of university users (students, officers, HoDs, accounts, admins). Supports search by email or name, and filtering by role. Password hashes are never returned.",
+        "operationId": "list_admin_users",
         "security": [
           {
             "OAuth2PasswordBearer": []
           }
-        ]
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search by email or full name",
+              "title": "Search"
+            },
+            "description": "Search by email or full name"
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/UserRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by user role",
+              "title": "Role"
+            },
+            "description": "Filter by user role"
+          },
+          {
+            "name": "department_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by department ID",
+              "title": "Department Id"
+            },
+            "description": "Filter by department ID"
+          },
+          {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by active status",
+              "title": "Is Active"
+            },
+            "description": "Filter by active status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Page limit",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page limit"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Page offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Page offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminUserListItem"
+                  },
+                  "title": "Response List Admin Users"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/users/{id}/reset-password": {
@@ -1956,10 +3920,677 @@
           }
         }
       }
+    },
+    "/admin/offices": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List University Offices and Staffing Status",
+        "description": "Returns all university departments with their active officers, HoD (if academic), and missing staff flags.",
+        "operationId": "list_admin_offices",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOfficeListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/users/bulk-upload": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Bulk Provision University Staff Users",
+        "description": "Uploads a CSV of university staff accounts (dept_officer, hod, registrar_accounts). Returns one-time temporary passwords ONLY in this response.",
+        "operationId": "bulk_upload_admin_users",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "google_only",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "When true, created accounts have no password and authenticate via Google",
+              "default": false,
+              "title": "Google Only"
+            },
+            "description": "When true, created accounts have no password and authenticate via Google"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_bulk_upload_admin_users"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserBulkUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CSV structure or missing headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/lab-courses/template.csv": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Download Lab Courses CSV Template (Admin)",
+        "description": "Downloads a CSV template formatted for lab course catalog upload.",
+        "operationId": "admin_get_lab_courses_template_csv",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/lab-courses": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List University Lab Courses (Admin)",
+        "description": "Returns all lab courses across all academic departments with optional department and active filters.",
+        "operationId": "admin_list_lab_courses",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "academic_department_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by academic department ID",
+              "title": "Academic Department Id"
+            },
+            "description": "Filter by academic department ID"
+          },
+          {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by active status",
+              "title": "Is Active"
+            },
+            "description": "Filter by active status"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "description": "Page limit",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page limit"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Page offset",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Page offset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create Lab Course (Admin)",
+        "description": "Creates a new lab course mapped to an academic department and an ASSIGNED_ONLY service department.",
+        "operationId": "admin_create_lab_course",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabCourseCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid department or not ASSIGNED_ONLY",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lab course code already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/lab-courses/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Lab Course (Admin)",
+        "description": "Updates a lab course's name, specialization, or active status.",
+        "operationId": "admin_patch_lab_course",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabCoursePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseItem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Lab course not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/requests/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Admin Cancel Clearance Request",
+        "description": "Allows administrators to cancel an active clearance request with mandatory reason.",
+        "operationId": "admin_cancel_clearance_request",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaffCancelRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid state (already cleared/verified) or missing reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/departments": {
+      "get": {
+        "tags": [
+          "Departments"
+        ],
+        "summary": "List University Departments",
+        "description": "Returns all active university departments (academic and service). Accessible to all authenticated users.",
+        "operationId": "list_departments",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DepartmentResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Departments"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/departments/assigned-only": {
+      "get": {
+        "tags": [
+          "Departments"
+        ],
+        "summary": "List ASSIGNED_ONLY Service Departments",
+        "description": "Returns all service departments that require specific assignment (labs, workshops, specialized centers) with description.",
+        "operationId": "list_assigned_only_departments",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssignedOnlyDepartmentItem"
+                  },
+                  "type": "array",
+                  "title": "Response List Assigned Only Departments"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "System and Database Health Check",
+        "description": "Performs a live connectivity probe against the PostgreSQL database. Returns 200 OK with connected status, or 503 Service Unavailable if unreachable.",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "System and database are operational",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthCheckResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Database connectivity probe failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AddDepartmentRequest": {
+        "properties": {
+          "department_id": {
+            "type": "integer",
+            "title": "Department Id",
+            "description": "ID of the department to add",
+            "examples": [
+              5
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "department_id"
+        ],
+        "title": "AddDepartmentRequest",
+        "description": "Payload to add a department to an existing clearance request."
+      },
+      "AddOfficeRequest": {
+        "properties": {
+          "department_id": {
+            "type": "integer",
+            "title": "Department Id",
+            "description": "ID of department to add",
+            "examples": [
+              5
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "description": "Mandatory justification for adding office",
+            "examples": [
+              "Workshop dues pending"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "department_id",
+          "reason"
+        ],
+        "title": "AddOfficeRequest",
+        "description": "Payload for staff to add an office to an active clearance request."
+      },
       "AdminCreateUserRequest": {
         "properties": {
           "email": {
@@ -2002,6 +4633,15 @@
             "examples": [
               4
             ]
+          },
+          "google_only": {
+            "type": "boolean",
+            "title": "Google Only",
+            "description": "When true, account has no password and authenticates exclusively via university Google account",
+            "default": false,
+            "examples": [
+              false
+            ]
           }
         },
         "type": "object",
@@ -2012,6 +4652,129 @@
         ],
         "title": "AdminCreateUserRequest",
         "description": "Payload for administrator to provision staff, officer or HoD user."
+      },
+      "AdminOfficeListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOfficeSummary"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "AdminOfficeListResponse",
+        "description": "List of all university departments and their staffing status."
+      },
+      "AdminOfficeSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "academic | service"
+          },
+          "applicability": {
+            "type": "string",
+            "title": "Applicability"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "active_officers": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOfficeUserSummary"
+            },
+            "type": "array",
+            "title": "Active Officers"
+          },
+          "hod": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdminOfficeUserSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "missing_officer": {
+            "type": "boolean",
+            "title": "Missing Officer",
+            "description": "True if department has no active dealing officer"
+          },
+          "missing_hod": {
+            "type": "boolean",
+            "title": "Missing Hod",
+            "description": "True if academic department has no active HoD"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "applicability",
+          "active_officers",
+          "missing_officer",
+          "missing_hod"
+        ],
+        "title": "AdminOfficeSummary",
+        "description": "Department/office status for university administrators."
+      },
+      "AdminOfficeUserSummary": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email"
+        ],
+        "title": "AdminOfficeUserSummary",
+        "description": "Summary of an officer or HoD user."
       },
       "AdminResetPasswordResponse": {
         "properties": {
@@ -2054,6 +4817,165 @@
         ],
         "title": "AdminUserActiveRequest",
         "description": "Payload to activate or deactivate a user account."
+      },
+      "AdminUserBulkUploadDetail": {
+        "properties": {
+          "row_number": {
+            "type": "integer",
+            "title": "Row Number"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "created | rejected"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "temporary_password": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temporary Password",
+            "description": "One-time temporary password (only returned in this response)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row_number",
+          "email",
+          "status"
+        ],
+        "title": "AdminUserBulkUploadDetail",
+        "description": "Row processing result in bulk user provisioning."
+      },
+      "AdminUserBulkUploadResponse": {
+        "properties": {
+          "total_rows": {
+            "type": "integer",
+            "title": "Total Rows"
+          },
+          "created_count": {
+            "type": "integer",
+            "title": "Created Count"
+          },
+          "rejected_count": {
+            "type": "integer",
+            "title": "Rejected Count"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/AdminUserBulkUploadDetail"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_rows",
+          "created_count",
+          "rejected_count",
+          "rows"
+        ],
+        "title": "AdminUserBulkUploadResponse",
+        "description": "Aggregate response for admin bulk user upload."
+      },
+      "AdminUserListItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department"
+          },
+          "department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Name"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Id"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "is_active",
+          "created_at"
+        ],
+        "title": "AdminUserListItem",
+        "description": "User account item in admin user directory."
       },
       "AdminUserResponse": {
         "properties": {
@@ -2142,6 +5064,84 @@
           "REJECTED"
         ],
         "title": "ApprovalStatus"
+      },
+      "AssignedOnlyDepartmentItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "AssignedOnlyDepartmentItem",
+        "description": "ASSIGNED_ONLY service department option for direct student declaration."
+      },
+      "AuthConfigResponse": {
+        "properties": {
+          "google_enabled": {
+            "type": "boolean",
+            "title": "Google Enabled",
+            "description": "Whether Google OAuth2 sign-in is enabled"
+          },
+          "google_client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Client Id",
+            "description": "Google OAuth2 client ID for frontend Google Identity Services"
+          },
+          "allowed_domain_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed Domain Hint",
+            "description": "Primary allowed university email domain hint",
+            "examples": [
+              "svsu.ac.in"
+            ]
+          },
+          "otp_signup_enabled": {
+            "type": "boolean",
+            "title": "Otp Signup Enabled",
+            "description": "Whether legacy student OTP registration is enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "google_enabled",
+          "otp_signup_enabled"
+        ],
+        "title": "AuthConfigResponse",
+        "description": "Public authentication configuration metadata."
       },
       "BankDetailRead": {
         "properties": {
@@ -2239,6 +5239,21 @@
         "title": "BankDetailUpdate",
         "description": "Payload to update student bank details."
       },
+      "Body_bulk_upload_admin_users": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "CSV file with staff accounts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_bulk_upload_admin_users"
+      },
       "Body_login_access_token": {
         "properties": {
           "grant_type": {
@@ -2298,6 +5313,36 @@
         ],
         "title": "Body_login_access_token"
       },
+      "Body_upload_department_lab_courses_csv": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "CSV file with lab courses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_department_lab_courses_csv"
+      },
+      "Body_upload_department_roster_csv": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "CSV file with student roster records"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_department_roster_csv"
+      },
       "Body_upload_roster_csv": {
         "properties": {
           "file": {
@@ -2313,6 +5358,54 @@
         ],
         "title": "Body_upload_roster_csv"
       },
+      "CancelResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Status message",
+            "default": "Clearance request successfully cancelled."
+          },
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "ID of cancelled request"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClearanceStatus",
+            "description": "Updated status",
+            "default": "CANCELLED"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id"
+        ],
+        "title": "CancelResponse",
+        "description": "Response returned upon cancelling a clearance request."
+      },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "title": "Current Password",
+            "description": "Current password"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 10,
+            "title": "New Password",
+            "description": "New password (minimum 10 characters)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "title": "ChangePasswordRequest",
+        "description": "Payload to change password."
+      },
       "ClearanceStatus": {
         "type": "string",
         "enum": [
@@ -2320,7 +5413,8 @@
           "ACTION_NEEDED",
           "HOD_REVIEW",
           "CLEARED",
-          "REFUND_VERIFIED"
+          "REFUND_VERIFIED",
+          "CANCELLED"
         ],
         "title": "ClearanceStatus"
       },
@@ -2377,6 +5471,80 @@
             "type": "array",
             "title": "Approvals",
             "description": "List of all department clearance reviews"
+          },
+          "refund_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RefundStatus"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Security deposit refund status",
+            "examples": [
+              "PENDING_VERIFICATION"
+            ]
+          },
+          "deposit_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deposit Amount",
+            "description": "Security deposit amount",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "deductions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deductions",
+            "description": "Total deductions applied by accounts",
+            "examples": [
+              "250.00"
+            ]
+          },
+          "final_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Amount",
+            "description": "Net refund amount to be paid to student",
+            "examples": [
+              "4750.00"
+            ]
+          },
+          "payment_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Reference",
+            "description": "Payment reference (NEFT/RTGS transaction ID) when PROCESSED",
+            "examples": [
+              "NEFT_SVSU_20261030_0099"
+            ]
           }
         },
         "type": "object",
@@ -2421,6 +5589,30 @@
         ],
         "title": "DecisionRequest",
         "description": "Payload submitted by a department officer or HoD to record a decision."
+      },
+      "DeclareLabCoursesRequest": {
+        "properties": {
+          "lab_course_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Lab Course Ids",
+            "description": "List of lab course IDs to declare",
+            "examples": [
+              [
+                1,
+                2
+              ]
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "lab_course_ids"
+        ],
+        "title": "DeclareLabCoursesRequest",
+        "description": "Payload for student to declare additional lab subjects."
       },
       "DepartmentApprovalItem": {
         "properties": {
@@ -2506,6 +5698,66 @@
             "title": "Decided At",
             "description": "Timestamp when decision was rendered"
           },
+          "decided_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By Name",
+            "description": "Full name of officer who decided approval",
+            "examples": [
+              "Library Officer (Demo)"
+            ]
+          },
+          "added_by_user_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added By User Id",
+            "description": "User ID of officer or HoD who added this department",
+            "examples": [
+              10
+            ]
+          },
+          "added_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added By Name",
+            "description": "Name of officer or HoD who added this department",
+            "examples": [
+              "Dr. Meenakshi Sharma"
+            ]
+          },
+          "added_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Added Reason",
+            "description": "Reason why department was added to request",
+            "examples": [
+              "Hardware Lab dues pending"
+            ]
+          },
           "resubmission_count": {
             "type": "integer",
             "title": "Resubmission Count",
@@ -2567,6 +5819,49 @@
             "description": "Student enrolled programme",
             "examples": [
               "Bachelor of Technology (B.Tech.) Computer Engineering"
+            ]
+          },
+          "declared_subjects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Declared Subjects",
+            "description": "Subject codes and names belonging to officer's lab department",
+            "examples": [
+              [
+                "CSE-L101: Data Structures Lab"
+              ]
+            ]
+          },
+          "declared_is_hosteller": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Is Hosteller",
+            "description": "Student hostel residency declaration (boolean for hostel office, null otherwise)",
+            "examples": [
+              true
+            ]
+          },
+          "others_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Others Note",
+            "description": "Student note for unmapped/additional facilities (null if office is linked to a declared lab subject)",
+            "examples": [
+              "Robotics workshop access needed"
             ]
           },
           "status": {
@@ -2650,6 +5945,301 @@
         "title": "DepartmentQueueResponse",
         "description": "Paginated list of department clearance queue items."
       },
+      "DepartmentResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "Department ID",
+            "examples": [
+              1
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Department name",
+            "examples": [
+              "Central Library"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Department kind: academic or service",
+            "examples": [
+              "service"
+            ]
+          },
+          "applicability": {
+            "type": "string",
+            "title": "Applicability",
+            "description": "Applicability rule",
+            "examples": [
+              "ALWAYS"
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Department description or location"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "applicability"
+        ],
+        "title": "DepartmentResponse",
+        "description": "University department basic metadata."
+      },
+      "DepartmentRosterCreate": {
+        "properties": {
+          "registration_number": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Registration Number",
+            "examples": [
+              "2026CS999"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "Amit Verma"
+            ]
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email",
+            "description": "Student email",
+            "examples": [
+              "2026cs999@svsu.ac.in"
+            ]
+          },
+          "mobile": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 5,
+            "title": "Mobile",
+            "examples": [
+              "9876543210"
+            ]
+          },
+          "programme_id": {
+            "type": "integer",
+            "title": "Programme Id",
+            "description": "Programme ID belonging to the academic department",
+            "examples": [
+              1
+            ]
+          },
+          "address": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Address",
+            "default": "",
+            "examples": [
+              "Room 101, Hostel A"
+            ]
+          },
+          "is_hosteller": {
+            "type": "boolean",
+            "title": "Is Hosteller",
+            "description": "Whether the student resides in university hostel",
+            "default": false
+          },
+          "security_deposit_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Security Deposit Amount",
+            "description": "Security deposit amount in INR",
+            "default": "0"
+          }
+        },
+        "type": "object",
+        "required": [
+          "registration_number",
+          "name",
+          "email",
+          "mobile",
+          "programme_id"
+        ],
+        "title": "DepartmentRosterCreate",
+        "description": "Payload to add a single student to the academic department's roster."
+      },
+      "DepartmentRosterItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "mobile": {
+            "type": "string",
+            "title": "Mobile"
+          },
+          "address": {
+            "type": "string",
+            "title": "Address"
+          },
+          "programme_id": {
+            "type": "integer",
+            "title": "Programme Id"
+          },
+          "programme_name": {
+            "type": "string",
+            "title": "Programme Name"
+          },
+          "is_hosteller": {
+            "type": "boolean",
+            "title": "Is Hosteller"
+          },
+          "security_deposit_amount": {
+            "type": "string",
+            "title": "Security Deposit Amount"
+          },
+          "has_user_account": {
+            "type": "boolean",
+            "title": "Has User Account",
+            "default": false
+          },
+          "assigned_department_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Assigned Department Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "registration_number",
+          "name",
+          "email",
+          "mobile",
+          "address",
+          "programme_id",
+          "programme_name",
+          "is_hosteller",
+          "security_deposit_amount"
+        ],
+        "title": "DepartmentRosterItem",
+        "description": "Student roster entry scoped to academic department."
+      },
+      "DepartmentRosterListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentRosterItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "DepartmentRosterListResponse",
+        "description": "Paginated roster list scoped to academic department."
+      },
+      "DepartmentRosterPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email",
+            "description": "New email (refused if student user account already exists)"
+          },
+          "mobile": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20,
+                "minLength": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile"
+          },
+          "address": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Address"
+          }
+        },
+        "type": "object",
+        "title": "DepartmentRosterPatch",
+        "description": "Payload to update an existing student in the academic department's roster."
+      },
       "ErrorResponse": {
         "properties": {
           "detail": {
@@ -2668,6 +6258,24 @@
         "title": "ErrorResponse",
         "description": "Standard API error payload."
       },
+      "GoogleAuthRequest": {
+        "properties": {
+          "credential": {
+            "type": "string",
+            "title": "Credential",
+            "description": "Google OAuth2 ID token credential issued by Google Identity Services",
+            "examples": [
+              "eyJhbGciOiJSUzI1NiIsImtpZCI6Ij..."
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "credential"
+        ],
+        "title": "GoogleAuthRequest",
+        "description": "Payload carrying the Google OAuth2 ID token credential."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2680,6 +6288,41 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HealthCheckResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Application service status",
+            "default": "ok",
+            "examples": [
+              "ok"
+            ]
+          },
+          "database": {
+            "type": "string",
+            "title": "Database",
+            "description": "Database connectivity status",
+            "default": "connected",
+            "examples": [
+              "connected"
+            ]
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment",
+            "description": "Runtime environment name",
+            "examples": [
+              "development"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "environment"
+        ],
+        "title": "HealthCheckResponse"
       },
       "HoDQueueItem": {
         "properties": {
@@ -2782,12 +6425,77 @@
               "Bachelor of Technology (B.Tech.) Computer Engineering"
             ]
           },
+          "academic_department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Department",
+            "description": "Student's academic department name",
+            "examples": [
+              "Skill Department of CS/IT"
+            ]
+          },
           "is_hosteller": {
-            "type": "boolean",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Is Hosteller",
-            "description": "Hosteller status",
+            "description": "Hosteller status (declared)",
             "examples": [
               true
+            ]
+          },
+          "declared_is_hosteller": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Declared Is Hosteller",
+            "description": "Student hostel residency declaration",
+            "examples": [
+              true
+            ]
+          },
+          "declared_subjects": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Declared Subjects",
+            "description": "All declared lab course codes and names",
+            "examples": [
+              [
+                "CSE-L101: Data Structures Lab"
+              ]
+            ]
+          },
+          "others_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Others Note",
+            "description": "Special declaration note from student",
+            "examples": [
+              "Project submitted in Lab-2"
             ]
           },
           "submitted_at": {
@@ -2808,6 +6516,21 @@
             "title": "Hod Remarks",
             "description": "Previous HoD rejection remarks if any"
           },
+          "certificate_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate Code",
+            "description": "Official clearance certificate UUID code if cleared",
+            "examples": [
+              "c8e54701-d70c-43a4-8490-6ce3b49725f8"
+            ]
+          },
           "approvals": {
             "items": {
               "$ref": "#/components/schemas/DepartmentApprovalItem"
@@ -2815,6 +6538,14 @@
             "type": "array",
             "title": "Approvals",
             "description": "Full table of all departmental clearance decisions"
+          },
+          "can_add_departments": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentResponse"
+            },
+            "type": "array",
+            "title": "Can Add Departments",
+            "description": "Offices that can still be added to the request"
           }
         },
         "type": "object",
@@ -2824,12 +6555,301 @@
           "student_name",
           "registration_number",
           "programme_name",
-          "is_hosteller",
           "submitted_at",
           "approvals"
         ],
         "title": "HoDRequestDetailResponse",
-        "description": "Full detail view for HoD review of a student clearance request."
+        "description": "Full detail view for HoD and Academic Officer review of a student clearance request."
+      },
+      "LabCourseCreate": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Code",
+            "examples": [
+              "CSE-L201"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "examples": [
+              "Data Structures & Algorithms Lab"
+            ]
+          },
+          "lab_department_id": {
+            "type": "integer",
+            "title": "Lab Department Id",
+            "description": "ID of ASSIGNED_ONLY service department providing the facility",
+            "examples": [
+              5
+            ]
+          },
+          "academic_department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Department Id",
+            "description": "Academic department ID (ignored or used by admin)",
+            "examples": [
+              1
+            ]
+          },
+          "specialization": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialization",
+            "examples": [
+              "AI & Machine Learning"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "lab_department_id"
+        ],
+        "title": "LabCourseCreate",
+        "description": "Payload to create a new lab or workshop course."
+      },
+      "LabCourseItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "academic_department_id": {
+            "type": "integer",
+            "title": "Academic Department Id"
+          },
+          "academic_department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Department Name"
+          },
+          "lab_department_id": {
+            "type": "integer",
+            "title": "Lab Department Id"
+          },
+          "lab_department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lab Department Name"
+          },
+          "specialization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialization"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "academic_department_id",
+          "lab_department_id",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "LabCourseItem",
+        "description": "Lab course item."
+      },
+      "LabCourseListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LabCourseItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "LabCourseListResponse",
+        "description": "List of lab courses."
+      },
+      "LabCoursePatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "specialization": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialization"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "LabCoursePatch",
+        "description": "Payload to edit a lab course."
+      },
+      "LabCourseUploadResponse": {
+        "properties": {
+          "total_rows": {
+            "type": "integer",
+            "title": "Total Rows"
+          },
+          "created_count": {
+            "type": "integer",
+            "title": "Created Count"
+          },
+          "updated_count": {
+            "type": "integer",
+            "title": "Updated Count"
+          },
+          "rejected_count": {
+            "type": "integer",
+            "title": "Rejected Count"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/LabCourseUploadRowReport"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total_rows",
+          "created_count",
+          "updated_count",
+          "rejected_count",
+          "rows"
+        ],
+        "title": "LabCourseUploadResponse",
+        "description": "Aggregate upload report for lab courses."
+      },
+      "LabCourseUploadRowReport": {
+        "properties": {
+          "row_number": {
+            "type": "integer",
+            "title": "Row Number"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "created | updated | rejected"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row_number",
+          "code",
+          "status"
+        ],
+        "title": "LabCourseUploadRowReport",
+        "description": "Result per processed CSV row in lab course upload."
       },
       "MarkRefundProcessedRequest": {
         "properties": {
@@ -2973,6 +6993,15 @@
         "title": "PublicVerificationResponse",
         "description": "Public certificate verification result."
       },
+      "RefundStatus": {
+        "type": "string",
+        "enum": [
+          "PENDING_VERIFICATION",
+          "VERIFIED",
+          "PROCESSED"
+        ],
+        "title": "RefundStatus"
+      },
       "RegistrarQueueItem": {
         "properties": {
           "request_id": {
@@ -3013,6 +7042,36 @@
             "description": "Security deposit deposited initially",
             "examples": [
               "5000.00"
+            ]
+          },
+          "deductions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deductions",
+            "description": "Approved deductions amount if verified",
+            "examples": [
+              "250.00"
+            ]
+          },
+          "final_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Amount",
+            "description": "Calculated final refund amount if verified",
+            "examples": [
+              "4750.00"
             ]
           },
           "cleared_at": {
@@ -3084,6 +7143,243 @@
         ],
         "title": "RegistrarQueueResponse",
         "description": "Paginated list of clearance requests pending refund processing."
+      },
+      "RegistrarRequestDetailResponse": {
+        "properties": {
+          "request_id": {
+            "type": "integer",
+            "title": "Request Id",
+            "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Clearance request status",
+            "examples": [
+              "CLEARED"
+            ]
+          },
+          "student_name": {
+            "type": "string",
+            "title": "Student Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "DEMO2026001"
+            ]
+          },
+          "programme": {
+            "type": "string",
+            "title": "Programme",
+            "description": "Enrolled degree programme",
+            "examples": [
+              "B.Tech Computer Engineering"
+            ]
+          },
+          "roster_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roster Source",
+            "description": "Provenance source of student roster entry",
+            "examples": [
+              "department_upload"
+            ]
+          },
+          "roster_created_by_user_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roster Created By User Id",
+            "description": "User ID who provisioned student roster record",
+            "examples": [
+              2
+            ]
+          },
+          "roster_created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roster Created By Name",
+            "description": "Name of staff who provisioned student",
+            "examples": [
+              "Officer CS/IT"
+            ]
+          },
+          "account_number_masked": {
+            "type": "string",
+            "title": "Account Number Masked",
+            "description": "Masked bank account number",
+            "examples": [
+              "********1234"
+            ]
+          },
+          "ifsc_code": {
+            "type": "string",
+            "title": "Ifsc Code",
+            "description": "Bank IFSC code",
+            "examples": [
+              "DEMO0001234"
+            ]
+          },
+          "account_holder_name": {
+            "type": "string",
+            "title": "Account Holder Name",
+            "description": "Bank account holder name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "bank_address": {
+            "type": "string",
+            "title": "Bank Address",
+            "description": "Bank branch address",
+            "examples": [
+              "Campus Branch, Gurugram"
+            ]
+          },
+          "deposit_amount": {
+            "type": "string",
+            "title": "Deposit Amount",
+            "description": "Security deposit amount",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "deductions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deductions",
+            "description": "Approved deductions if verified",
+            "examples": [
+              "250.00"
+            ]
+          },
+          "final_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Amount",
+            "description": "Final refund amount if verified",
+            "examples": [
+              "4750.00"
+            ]
+          },
+          "refund_status": {
+            "type": "string",
+            "title": "Refund Status",
+            "description": "Refund record status",
+            "examples": [
+              "PENDING_VERIFICATION"
+            ]
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentApprovalItem"
+            },
+            "type": "array",
+            "title": "Approvals",
+            "description": "List of departmental clearance decisions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "request_id",
+          "status",
+          "student_name",
+          "registration_number",
+          "programme",
+          "account_number_masked",
+          "ifsc_code",
+          "account_holder_name",
+          "bank_address",
+          "deposit_amount",
+          "refund_status",
+          "approvals"
+        ],
+        "title": "RegistrarRequestDetailResponse",
+        "description": "Full request details for registrar review with roster provenance."
+      },
+      "RevealBankDetailsResponse": {
+        "properties": {
+          "account_holder_name": {
+            "type": "string",
+            "title": "Account Holder Name",
+            "description": "Bank account holder name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "account_number": {
+            "type": "string",
+            "title": "Account Number",
+            "description": "Full unmasked bank account number",
+            "examples": [
+              "123456789012"
+            ]
+          },
+          "ifsc_code": {
+            "type": "string",
+            "title": "Ifsc Code",
+            "description": "Bank IFSC code",
+            "examples": [
+              "DEMO0001234"
+            ]
+          },
+          "bank_address": {
+            "type": "string",
+            "title": "Bank Address",
+            "description": "Bank branch address",
+            "examples": [
+              "Campus Branch, Gurugram"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_holder_name",
+          "account_number",
+          "ifsc_code",
+          "bank_address"
+        ],
+        "title": "RevealBankDetailsResponse",
+        "description": "Audited plain bank account details revealed to registrar."
       },
       "RosterAssignedDepartmentsRequest": {
         "properties": {
@@ -3318,6 +7614,18 @@
               }
             ],
             "title": "Mobile"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
           }
         },
         "type": "object",
@@ -3480,9 +7788,9 @@
           },
           "password": {
             "type": "string",
-            "minLength": 8,
+            "minLength": 10,
             "title": "Password",
-            "description": "New password (minimum 8 characters)",
+            "description": "New password (minimum 10 characters)",
             "examples": [
               "StudentSecure@2026"
             ]
@@ -3496,6 +7804,197 @@
         ],
         "title": "SignupVerifyRequest",
         "description": "Payload to verify OTP and establish student account password."
+      },
+      "StaffCancelRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason",
+            "description": "Mandatory reason for cancellation",
+            "examples": [
+              "Student withdrew application"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "StaffCancelRequest",
+        "description": "Payload when department officer or admin cancels request."
+      },
+      "StudentCancelRequest": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Optional cancellation reason",
+            "examples": [
+              "Want to re-declare lab subjects"
+            ]
+          }
+        },
+        "type": "object",
+        "title": "StudentCancelRequest",
+        "description": "Optional payload when student cancels request."
+      },
+      "StudentClearanceApply": {
+        "properties": {
+          "is_hosteller": {
+            "type": "boolean",
+            "title": "Is Hosteller",
+            "description": "Declare whether student resided in university hostel",
+            "default": false
+          },
+          "lab_course_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lab Course Ids",
+            "description": "Declared lab course IDs (mapped to their lab offices)",
+            "examples": [
+              [
+                1,
+                2
+              ]
+            ]
+          },
+          "other_office_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Other Office Ids",
+            "description": "Optional list of additional ASSIGNED_ONLY department/office IDs",
+            "examples": [
+              [
+                26,
+                27
+              ]
+            ]
+          },
+          "others_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Others Note",
+            "description": "Optional note for any additional dues/facilities"
+          },
+          "bank": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BankDetailUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Student refund bank details (if not already set)"
+          }
+        },
+        "type": "object",
+        "title": "StudentClearanceApply",
+        "description": "Declarations submitted when applying for clearance."
+      },
+      "StudentLabCatalogItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "lab_department_id": {
+            "type": "integer",
+            "title": "Lab Department Id"
+          },
+          "lab_department_name": {
+            "type": "string",
+            "title": "Lab Department Name"
+          },
+          "specialization": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Specialization"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "name",
+          "lab_department_id",
+          "lab_department_name"
+        ],
+        "title": "StudentLabCatalogItem",
+        "description": "Lab course option for student declaration."
+      },
+      "StudentLabCatalogResponse": {
+        "properties": {
+          "lab_courses": {
+            "items": {
+              "$ref": "#/components/schemas/StudentLabCatalogItem"
+            },
+            "type": "array",
+            "title": "Lab Courses"
+          },
+          "assigned_only_departments": {
+            "items": {
+              "$ref": "#/components/schemas/AssignedOnlyDepartmentItem"
+            },
+            "type": "array",
+            "title": "Assigned Only Departments"
+          }
+        },
+        "type": "object",
+        "required": [
+          "lab_courses",
+          "assigned_only_departments"
+        ],
+        "title": "StudentLabCatalogResponse",
+        "description": "Lab catalog and fallback service offices available for student declaration."
       },
       "TokenResponse": {
         "properties": {
@@ -3512,6 +8011,12 @@
             "examples": [
               "bearer"
             ]
+          },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password",
+            "description": "Whether the user must change password before accessing system",
+            "default": false
           }
         },
         "type": "object",
@@ -3593,6 +8098,12 @@
               "Skill Department of CS/IT"
             ]
           },
+          "must_change_password": {
+            "type": "boolean",
+            "title": "Must Change Password",
+            "description": "Whether the user must change password before accessing system",
+            "default": false
+          },
           "roster": {
             "anyOf": [
               {
@@ -3667,6 +8178,25 @@
       },
       "VerifyRefundRequest": {
         "properties": {
+          "deposit_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deposit Amount",
+            "description": "Confirmed security deposit from university official records (optional, defaults to draft deposit)",
+            "examples": [
+              "5000.00"
+            ]
+          },
           "deductions": {
             "anyOf": [
               {
@@ -3684,14 +8214,9 @@
             ]
           },
           "remarks": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
             "title": "Remarks",
             "description": "Justification or breakdown for deductions",
             "examples": [
@@ -3701,7 +8226,8 @@
         },
         "type": "object",
         "required": [
-          "deductions"
+          "deductions",
+          "remarks"
         ],
         "title": "VerifyRefundRequest",
         "description": "Payload to verify and compute refund deductions."
@@ -3801,7 +8327,7 @@
     },
     {
       "name": "Department Officer",
-      "description": "Review and decision workflow for departmental officers (Library, Hostel, Labs, Workshops, etc.)."
+      "description": "Review and decision workflow for departmental officers (Library, Hostel, Labs, Workshops, etc.), plus academic roster and lab catalog delegation."
     },
     {
       "name": "HoD",
@@ -3818,6 +8344,10 @@
     {
       "name": "Admin",
       "description": "Administrative roster CSV upload, student profile edits, staff user creation, and access management."
+    },
+    {
+      "name": "Departments",
+      "description": "University departments directory and lookup."
     }
   ]
 }

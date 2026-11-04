@@ -19,6 +19,21 @@ export const hodApi = {
   },
 
   /**
+   * HoD adds an assigned office to student clearance request
+   * @param {number} requestId
+   * @param {Object} data
+   * @param {number} data.departmentId
+   * @param {string} data.reason
+   */
+  async addDepartment(requestId, { departmentId, reason }) {
+    const response = await api.post(`/hod/requests/${requestId}/add-department`, {
+      department_id: Number(departmentId),
+      reason: reason.trim(),
+    })
+    return response.data
+  },
+
+  /**
    * Submit final HoD decision (APPROVED: CLEARED + Cert; REJECTED: ACTION_NEEDED)
    * @param {number} requestId
    * @param {Object} data

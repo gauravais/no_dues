@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/auth/AuthContext'
+import { departmentApi } from '@/api/department'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -20,7 +22,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Menu, LogOut } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Menu, LogOut, KeyRound, HelpCircle, ChevronDown } from 'lucide-react'
 
 const ROLE_LABELS = {
   student: 'Student',
@@ -37,14 +47,44 @@ export function AppShell({ children }) {
   const location = useLocation()
   const navigate = useNavigate()
 
-  const navLinks = [
-    ...(isStudent ? [{ label: 'My Clearance', path: '/student' }] : []),
-    ...(isOfficer ? [{ label: 'Department Queue', path: '/officer' }] : []),
-    ...(isHod ? [{ label: 'HoD Approvals', path: '/hod' }] : []),
-    ...(isRegistrar ? [{ label: 'Refunds & Accounts', path: '/registrar' }] : []),
-    ...(isAdmin ? [{ label: 'System Admin', path: '/admin' }] : []),
-    { label: 'Verify Certificate', path: '/verify' },
-  ]
+  // Fetch departments to determine if the officer is assigned to an ACADEMIC department
+  const { data: departments = [] } = useQuery({
+    queryKey: ['departments'],
+    queryFn: () => departmentApi.getDepartments(),
+    staleTime: 300000,
+    enabled: Boolean(user && isOfficer),
+  })
+
+  const officerDept = departments.find((d) => d.id === user?.department_id)
+  const isAcademicOfficer = isOfficer && officerDept?.kind === 'academic'
+
+  const navLinks = user?.must_change_password
+    ? [{ label: 'Change Password', path: '/change-password' }]
+    : [
+        ...(isStudent ? [{ label: 'My Clearance', path: '/student' }] : []),
+        ...(isOfficer
+          ? [
+              { label: 'Department Queue', path: '/officer' },
+              ...(isAcademicOfficer
+                ? [
+                    { label: 'Student Roster', path: '/officer/roster' },
+                    { label: 'Lab Catalog', path: '/officer/lab-catalog' },
+                  ]
+                : []),
+            ]
+          : []),
+        ...(isHod ? [{ label: 'HoD Approvals', path: '/hod' }] : []),
+        ...(isRegistrar ? [{ label: 'Refunds & Accounts', path: '/registrar' }] : []),
+        ...(isAdmin
+          ? [
+              { label: 'Offices & Staffing', path: '/admin/offices' },
+              { label: 'Staff Directory', path: '/admin/users' },
+              { label: 'Master Roster', path: '/admin/roster' },
+              { label: 'Lab Catalog', path: '/admin/lab-courses' },
+            ]
+          : []),
+        { label: 'Verify Certificate', path: '/verify' },
+      ]
 
   const handleLogoutClick = () => {
     setLogoutDialogOpen(true)
@@ -93,24 +133,60 @@ export function AppShell({ children }) {
           <div className="hidden md:flex items-center gap-3">
             {user ? (
               <div className="flex items-center gap-3">
-                <div className="text-right">
-                  <div className="text-xs font-semibold text-zinc-900 leading-none">
-                    {user.full_name || user.email}
-                  </div>
-                  <div className="flex items-center justify-end gap-1.5 mt-1">
-                    <Badge
-                      variant="outline"
-                      className="text-[10px] font-medium px-1.5 py-0 bg-zinc-50 border-zinc-200 text-zinc-600 uppercase tracking-wider"
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-zinc-100 transition-colors text-left focus:outline-hidden"
                     >
-                      {ROLE_LABELS[user.role] || user.role}
-                    </Badge>
-                    {user.department_name && (
-                      <span className="text-[11px] text-muted-foreground truncate max-w-[120px]">
-                        • {user.department_name}
-                      </span>
-                    )}
-                  </div>
-                </div>
+                      <div className="text-right">
+                        <div className="text-xs font-semibold text-zinc-900 leading-none">
+                          {user.full_name || user.email}
+                        </div>
+                        <div className="flex items-center justify-end gap-1.5 mt-1">
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] font-medium px-1.5 py-0 bg-zinc-50 border-zinc-200 text-zinc-600 uppercase tracking-wider"
+                          >
+                            {ROLE_LABELS[user.role] || user.role}
+                          </Badge>
+                          {user.department_name && (
+                            <span className="text-[11px] text-muted-foreground truncate max-w-[120px]">
+                              • {user.department_name}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56 bg-white shadow-lg border border-zinc-200">
+                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground py-1.5">
+                      Signed in as <span className="font-semibold text-zinc-900 block truncate">{user.email}</span>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem asChild>
+                      <Link to="/change-password" className="cursor-pointer flex items-center gap-2 text-xs py-1.5">
+                        <KeyRound className="w-3.5 h-3.5 text-zinc-500" />
+                        Change Password
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link to="/help" className="cursor-pointer flex items-center gap-2 text-xs py-1.5">
+                        <HelpCircle className="w-3.5 h-3.5 text-zinc-500" />
+                        Help & Guide
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={handleLogoutClick}
+                      className="cursor-pointer text-xs text-red-600 focus:text-red-700 focus:bg-red-50 flex items-center gap-2 py-1.5"
+                    >
+                      <LogOut className="w-3.5 h-3.5" />
+                      Sign Out
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 <Button
                   variant="outline"
@@ -124,6 +200,14 @@ export function AppShell({ children }) {
               </div>
             ) : (
               <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => navigate('/help')}
+                  className="text-xs text-zinc-600 hover:text-zinc-900"
+                >
+                  Help
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -190,6 +274,24 @@ export function AppShell({ children }) {
                       </Link>
                     )
                   })}
+                  {user && (
+                    <Link
+                      to="/change-password"
+                      onClick={() => setMobileOpen(false)}
+                      className="px-3 py-2 text-sm font-medium rounded-md transition-colors text-zinc-600 hover:bg-zinc-50 flex items-center gap-2"
+                    >
+                      <KeyRound className="w-4 h-4 text-zinc-400" />
+                      Change Password
+                    </Link>
+                  )}
+                  <Link
+                    to="/help"
+                    onClick={() => setMobileOpen(false)}
+                    className="px-3 py-2 text-sm font-medium rounded-md transition-colors text-zinc-600 hover:bg-zinc-50 flex items-center gap-2"
+                  >
+                    <HelpCircle className="w-4 h-4 text-zinc-400" />
+                    Help & Guide
+                  </Link>
                 </div>
 
                 <div className="mt-8 pt-4 border-t border-zinc-100">
@@ -246,15 +348,15 @@ export function AppShell({ children }) {
       {/* Minimal Footer */}
       <footer className="border-t border-border bg-white py-6">
         <div className="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-muted-foreground">
-          <p>
-            Student capstone project. Not an official university system. Demo uses synthetic data.
-          </p>
+          <p>© 2026 Shri Vishwakarma Skill University</p>
           <div className="flex items-center gap-4">
+            <Link to="/help" className="hover:text-foreground underline underline-offset-4">
+              Help & Guide
+            </Link>
+            <span>•</span>
             <Link to="/verify" className="hover:text-foreground underline underline-offset-4">
               Public Verification
             </Link>
-            <span>•</span>
-            <span>Shri Vishwakarma Skill University</span>
           </div>
         </div>
       </footer>

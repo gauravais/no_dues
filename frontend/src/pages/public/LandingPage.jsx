@@ -17,8 +17,7 @@ import {
 } from 'lucide-react'
 
 const DEPARTMENTS_MARQUEE = [
-  'Skill Faculty of Engineering & Technology',
-  'Skill Department of CS/IT',
+  'Skill Faculties & Academic Departments',
   'Central University Library',
   'Sports & Gymnasium Section',
   'Hostel Office (Boys & Girls)',
@@ -31,8 +30,8 @@ const DEPARTMENTS_MARQUEE = [
 const WORKFLOW_STEPS = [
   {
     step: '01',
-    title: 'Bank Verification',
-    desc: 'Verify institutional identity with Roster OTP and register bank details. Security deposits are returned directly to this account.',
+    title: 'University Google Sign-In',
+    desc: 'Sign in with your university Google account (@svsu.ac.in) and register bank details. Security deposits are returned directly to this account.',
     icon: CreditCard,
   },
   {
@@ -55,8 +54,8 @@ const WORKFLOW_STEPS = [
   },
 ]
 
-// Sample preview departments for the in-code product visual
-const SAMPLE_DEPARTMENTS = [
+// Preview departments for the in-code product visual
+const PREVIEW_DEPARTMENTS = [
   { name: 'Library', status: 'APPROVED', remarks: 'All books returned' },
   { name: 'Sports Section', status: 'APPROVED', remarks: 'Kit returned' },
   { name: 'Computer Lab / Centre', status: 'APPROVED', remarks: 'Equipments verified' },
@@ -65,12 +64,12 @@ const SAMPLE_DEPARTMENTS = [
   { name: 'Dean Student Welfare', status: 'APPROVED', remarks: 'Cleared' },
   { name: 'N.S.S. Section', status: 'APPROVED', remarks: 'Cleared' },
   { name: 'R&S Branch', status: 'APPROVED', remarks: 'Documents verified' },
-  { name: 'Skill Dept of CS/IT', status: 'PENDING', remarks: 'Under faculty review' },
+  { name: 'Academic Department', status: 'PENDING', remarks: 'Under department review' },
   { name: 'Account Section', status: 'REJECTED', remarks: 'Lab breakage fine: Rs. 150' },
 ]
 
 export function LandingPage() {
-  useDocumentTitle('Official Clearance Portal')
+  useDocumentTitle('Clearance Portal')
   const heroRef = useRef(null)
   const cursorRef = useRef(null)
   const [hasFinePointer, setHasFinePointer] = useState(false)
@@ -180,7 +179,7 @@ export function LandingPage() {
               size="sm"
               className="text-xs bg-primary text-primary-foreground hover:bg-zinc-800"
             >
-              <Link to="/signup">Student Sign Up</Link>
+              <Link to="/login">Student Sign In</Link>
             </Button>
           </nav>
         </div>
@@ -218,7 +217,7 @@ export function LandingPage() {
               size="lg"
               className="bg-primary text-primary-foreground hover:bg-zinc-800 font-semibold h-11 px-6 rounded-lg gap-2 shadow-xs w-full sm:w-auto text-sm"
             >
-              <Link to="/signup">
+              <Link to="/login">
                 Apply for Clearance <ArrowRight className="w-4 h-4" />
               </Link>
             </Button>
@@ -247,18 +246,18 @@ export function LandingPage() {
                         Aman Gupta
                       </span>
                       <span className="text-xs font-mono text-zinc-500">
-                        (Sample: 2024CS042)
+                        (Reg: 2024CS042)
                       </span>
                     </div>
                     <span className="text-xs text-zinc-500 block">
-                      B.Tech Computer Science & Engineering • Skill Faculty of Engineering & Technology
+                      University Degree Programme • Academic Department
                     </span>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="bg-amber-50 text-amber-900 border-amber-200 text-xs py-0.5">
-                    Sample Preview
+                    Status Preview
                   </Badge>
                   <StatusBadge status="ACTION_NEEDED" size="sm" />
                 </div>
@@ -277,7 +276,7 @@ export function LandingPage() {
 
               {/* Parallel Department Reviews Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 pt-2">
-                {SAMPLE_DEPARTMENTS.map((dept, i) => (
+                {PREVIEW_DEPARTMENTS.map((dept, i) => (
                   <div
                     key={i}
                     className={`rounded-lg p-2.5 border text-xs flex flex-col justify-between transition-colors ${
@@ -428,11 +427,11 @@ export function LandingPage() {
                 <div className="col-span-2 space-y-2">
                   <div>
                     <span className="text-[10px] text-zinc-400 uppercase tracking-wide block">Recipient</span>
-                    <span className="font-semibold text-zinc-900">Aarav Sharma (Sample: 2024CS001)</span>
+                    <span className="font-semibold text-zinc-900">Aarav Sharma (Reg: 2024CS001)</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-zinc-400 uppercase tracking-wide block">Programme & Dept</span>
-                    <span className="text-zinc-700">B.Tech Computer Engineering • CS/IT</span>
+                    <span className="text-zinc-700">University Degree Programme • Academic Department</span>
                   </div>
                   <div>
                     <span className="text-[10px] text-zinc-400 uppercase tracking-wide block">Verification Code</span>
@@ -465,16 +464,16 @@ export function LandingPage() {
             Ready to initiate university clearance?
           </h2>
           <p className="text-sm text-zinc-600 max-w-xl mx-auto leading-relaxed">
-            Students can verify their registered email via one-time password and submit in under three minutes.
+            Students can sign in directly with their university Google account and submit in under three minutes.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
             <Button asChild size="lg" className="bg-primary text-primary-foreground hover:bg-zinc-800 text-sm h-11 px-6 shadow-xs w-full sm:w-auto">
-              <Link to="/signup">
-                Create Student Account <ArrowRight className="w-4 h-4 ml-2" />
+              <Link to="/login">
+                Sign In to Apply <ArrowRight className="w-4 h-4 ml-2" />
               </Link>
             </Button>
             <Button asChild variant="outline" size="lg" className="text-sm h-11 px-6 border-border hover:bg-zinc-50 w-full sm:w-auto">
-              <Link to="/login">Sign In</Link>
+              <Link to="/login">Staff Sign In</Link>
             </Button>
           </div>
         </div>
@@ -493,9 +492,6 @@ export function LandingPage() {
                 Shri Vishwakarma Skill University capstone project.
                 Digital workflow replacing manual university paper-based clearance forms.
               </p>
-              <p className="text-[11px] text-zinc-400">
-                Student capstone project. Not an official university system. Demo uses synthetic data.
-              </p>
             </div>
 
             {/* Col 2: Navigation Links */}
@@ -508,7 +504,7 @@ export function LandingPage() {
                   <Link to="/login" className="hover:text-black transition-colors">Portal Login</Link>
                 </li>
                 <li>
-                  <Link to="/signup" className="hover:text-black transition-colors">Student Registration</Link>
+                  <Link to="/login" className="hover:text-black transition-colors">Student Sign In</Link>
                 </li>
                 <li>
                   <Link to="/verify" className="hover:text-black transition-colors">Verify Certificate</Link>
@@ -522,16 +518,15 @@ export function LandingPage() {
                 University Scope
               </h4>
               <ul className="space-y-1.5 text-xs text-zinc-500">
-                <li>Skill Faculty of Engineering & Tech</li>
-                <li>Skill Department of CS/IT</li>
-                <li>Security Deposit Refund Audit</li>
+                <li>Skill faculties and departments, added department by department</li>
+                <li>University-wide clearance offices (library, hostel, labs, accounts and more)</li>
+                <li>Security deposit refund and no-dues clearance</li>
               </ul>
             </div>
           </div>
 
           <div className="pt-6 flex flex-col sm:flex-row items-center justify-between text-xs text-zinc-400 gap-2">
-            <span>© 2026 Shri Vishwakarma Skill University (Demo Capstone)</span>
-            <span>FastAPI • React 19 • Tailwind CSS • shadcn/ui</span>
+            <span>© 2026 Shri Vishwakarma Skill University</span>
           </div>
         </div>
       </footer>

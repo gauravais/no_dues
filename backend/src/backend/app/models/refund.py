@@ -2,7 +2,7 @@
 import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, Integer, ForeignKey, Enum as SAEnum,
+    Column, Integer, String, ForeignKey, Enum as SAEnum,
     DateTime, Numeric
 )
 from sqlalchemy.orm import relationship
@@ -29,6 +29,7 @@ class Refund(Base):
         SAEnum(RefundStatus, name="refund_status"), nullable=False,
         default=RefundStatus.PENDING_VERIFICATION
     )
+    payment_reference = Column(String(100), nullable=True)
     updated_at = Column(
         DateTime(timezone=True), nullable=False,
         default=lambda: datetime.now(timezone.utc),

@@ -40,6 +40,7 @@ class Department(Base):
         nullable=False,
     )
     faculty_id = Column(Integer, ForeignKey("faculties.id"), nullable=True)
+    description = Column(String(500), nullable=True)
 
     __table_args__ = (
         # Academic departments MUST have faculty_id and applicability OWN_ACADEMIC

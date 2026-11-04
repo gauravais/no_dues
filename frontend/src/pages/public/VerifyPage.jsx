@@ -157,7 +157,7 @@ export function VerifyPage() {
       </div>
 
       <footer className="text-center text-xs text-muted-foreground mt-8">
-        Student capstone project. Not an official university system. Demo uses synthetic data.
+        © 2026 Shri Vishwakarma Skill University
       </footer>
     </div>
   )

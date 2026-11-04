@@ -27,13 +27,14 @@ SessionDep = Annotated[Session, Depends(get_db)]
 TokenDep = Annotated[str, Depends(oauth2_scheme)]
 
 
-def get_current_user(
+def get_current_user_any(
     db: SessionDep,
     token: TokenDep,
 ) -> User:
     """
     Decodes the JWT Bearer token and ALWAYS reloads the live user record from the database.
-    Verifies that the user exists and is active.
+    Verifies that the user exists and is active, without checking must_change_password.
+    Used for endpoints accessible when password change is required (/auth/me, /auth/change-password).
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -68,6 +69,24 @@ def get_current_user(
     return user
 
 
+CurrentUserAnyDep = Annotated[User, Depends(get_current_user_any)]
+
+
+def get_current_user(
+    current_user: CurrentUserAnyDep,
+) -> User:
+    """
+    Ensures active user does not have must_change_password set.
+    If must_change_password is True, raises 403 Forbidden with PASSWORD_CHANGE_REQUIRED.
+    """
+    if current_user.must_change_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PASSWORD_CHANGE_REQUIRED",
+        )
+    return current_user
+
+
 CurrentUserDep = Annotated[User, Depends(get_current_user)]
 
 
@@ -85,3 +104,32 @@ def require_roles(*allowed_roles: UserRole):
         return current_user
 
     return role_checker
+
+
+def require_academic_officer(
+    current_user: CurrentUserDep,
+    db: SessionDep,
+) -> User:
+    """
+    Enforces that the user is a dept_officer belonging to an academic department.
+    Returns 403 Forbidden for service department officers or other roles.
+    """
+    if current_user.role != UserRole.dept_officer:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Operation forbidden: required role is dept_officer, your role is {current_user.role.value}",
+        )
+    if not current_user.department_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation forbidden: officer is not assigned to any department",
+        )
+    from backend.app.models.university import Department, DepartmentKind
+    dept = db.get(Department, current_user.department_id)
+    if not dept or dept.kind != DepartmentKind.academic:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Operation forbidden: roster and lab catalog management is restricted to academic department officers",
+        )
+    return current_user
+

@@ -47,16 +47,40 @@ class SignupVerifyRequest(BaseModel):
     )
     password: str = Field(
         ...,
-        min_length=8,
-        description="New password (minimum 8 characters)",
+        min_length=10,
+        description="New password (minimum 10 characters)",
         examples=["StudentSecure@2026"],
     )
+
+
+class ChangePasswordRequest(BaseModel):
+    """Payload to change password."""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=10, description="New password (minimum 10 characters)")
 
 
 class TokenResponse(BaseModel):
     """OAuth2 Bearer token response."""
     access_token: str = Field(..., description="JWT Bearer token for authorized requests")
     token_type: str = Field("bearer", description="Token type standard", examples=["bearer"])
+    must_change_password: bool = Field(False, description="Whether the user must change password before accessing system")
+
+
+class GoogleAuthRequest(BaseModel):
+    """Payload carrying the Google OAuth2 ID token credential."""
+    credential: str = Field(
+        ...,
+        description="Google OAuth2 ID token credential issued by Google Identity Services",
+        examples=["eyJhbGciOiJSUzI1NiIsImtpZCI6Ij..."],
+    )
+
+
+class AuthConfigResponse(BaseModel):
+    """Public authentication configuration metadata."""
+    google_enabled: bool = Field(..., description="Whether Google OAuth2 sign-in is enabled")
+    google_client_id: str | None = Field(None, description="Google OAuth2 client ID for frontend Google Identity Services")
+    allowed_domain_hint: str | None = Field(None, description="Primary allowed university email domain hint", examples=["svsu.ac.in"])
+    otp_signup_enabled: bool = Field(..., description="Whether legacy student OTP registration is enabled")
 
 
 class RosterSummary(BaseModel):
@@ -94,4 +118,5 @@ class UserMeResponse(BaseModel):
     role: str = Field(..., description="System role identifier", examples=["student"])
     department_id: int | None = Field(None, description="Assigned department ID (for staff and HoD)", examples=[4])
     department_name: str | None = Field(None, description="Assigned department title", examples=["Skill Department of CS/IT"])
+    must_change_password: bool = Field(False, description="Whether the user must change password before accessing system")
     roster: RosterSummary | None = Field(None, description="Detailed roster info if user role is student")

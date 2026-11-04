@@ -37,6 +37,11 @@ const STATUS_CONFIGS = {
     icon: CreditCard,
     className: 'bg-teal-50 text-teal-900 border-teal-200 hover:bg-teal-50',
   },
+  CANCELLED: {
+    label: 'Cancelled',
+    icon: XCircle,
+    className: 'bg-zinc-100 text-zinc-600 border-zinc-300 hover:bg-zinc-100',
+  },
 
   // Department Approval Statuses
   PENDING: {

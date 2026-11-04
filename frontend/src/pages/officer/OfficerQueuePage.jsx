@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { departmentApi } from '@/api/department'
 import { useAuth } from '@/auth/AuthContext'
@@ -172,10 +173,60 @@ export function OfficerQueuePage() {
         accessorKey: 'programme_name',
         header: 'Programme',
         cell: ({ row }) => (
-          <span className="text-xs text-zinc-600 line-clamp-2 max-w-[260px]">
+          <span className="text-xs text-zinc-600 line-clamp-2 max-w-[200px]">
             {row.original.programme_name}
           </span>
         ),
+      },
+      {
+        id: 'declared_items',
+        header: 'Declared Subjects / Items',
+        cell: ({ row }) => {
+          const item = row.original
+          const subs = item.declared_subjects || []
+          const hasHostel = item.declared_is_hosteller !== null && item.declared_is_hosteller !== undefined
+          const hasNote = Boolean(item.others_note)
+
+          return (
+            <div className="space-y-1.5 max-w-[240px]">
+              {hasHostel && (
+                <div>
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] font-medium ${
+                      item.declared_is_hosteller
+                        ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                        : 'bg-zinc-50 text-zinc-700 border-zinc-200'
+                    }`}
+                  >
+                    Hostel: {item.declared_is_hosteller ? 'Hosteller (Yes)' : 'Day Scholar (No)'}
+                  </Badge>
+                </div>
+              )}
+              {subs.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {subs.map((s, idx) => (
+                    <Badge
+                      key={idx}
+                      variant="outline"
+                      className="font-mono text-[10px] bg-zinc-50 border-zinc-200 text-zinc-800"
+                    >
+                      {s}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              {hasNote && (
+                <div className="text-[10px] text-zinc-600 bg-amber-50/70 border border-amber-200 rounded px-1.5 py-0.5 line-clamp-2">
+                  <span className="font-semibold text-amber-900">Note:</span> {item.others_note}
+                </div>
+              )}
+              {!hasHostel && subs.length === 0 && !hasNote && (
+                <span className="text-[11px] text-zinc-400 italic">No specific subjects</span>
+              )}
+            </div>
+          )
+        },
       },
       {
         accessorKey: 'submitted_at',
@@ -219,16 +270,29 @@ export function OfficerQueuePage() {
           const item = row.original
           const isPending = item.status === 'PENDING'
 
-          return isPending ? (
-            <Button
-              size="sm"
-              onClick={() => openDecisionModal(item)}
-              className="h-8 px-3 text-xs bg-zinc-950 text-white hover:bg-zinc-800"
-            >
-              Review
-            </Button>
-          ) : (
-            <span className="text-xs text-zinc-400 italic">Decided</span>
+          return (
+            <div className="flex items-center gap-1.5">
+              {isPending ? (
+                <Button
+                  size="sm"
+                  onClick={() => openDecisionModal(item)}
+                  className="h-8 px-3 text-xs bg-zinc-950 text-white hover:bg-zinc-800"
+                >
+                  Review
+                </Button>
+              ) : (
+                <span className="text-xs text-zinc-400 italic mr-1">Decided</span>
+              )}
+              <Link to={`/officer/requests/${item.request_id}`}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2.5 text-xs border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                >
+                  Dossier
+                </Button>
+              </Link>
+            </div>
           )
         },
       },
@@ -270,6 +334,37 @@ export function OfficerQueuePage() {
         {item.programme_name}
       </div>
 
+      {item.declared_is_hosteller !== null && item.declared_is_hosteller !== undefined && (
+        <div>
+          <Badge
+            variant="outline"
+            className={`text-[10px] font-medium ${
+              item.declared_is_hosteller
+                ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                : 'bg-zinc-50 text-zinc-700 border-zinc-200'
+            }`}
+          >
+            Hostel: {item.declared_is_hosteller ? 'Hosteller (Yes)' : 'Day Scholar (No)'}
+          </Badge>
+        </div>
+      )}
+
+      {item.declared_subjects && item.declared_subjects.length > 0 && (
+        <div className="flex flex-wrap gap-1 pt-1">
+          {item.declared_subjects.map((s, idx) => (
+            <Badge key={idx} variant="outline" className="font-mono text-[10px] bg-zinc-50">
+              {s}
+            </Badge>
+          ))}
+        </div>
+      )}
+
+      {item.others_note && (
+        <div className="text-[11px] text-zinc-600 bg-amber-50/70 border border-amber-200 rounded px-2 py-1">
+          <span className="font-semibold text-amber-900">Note:</span> {item.others_note}
+        </div>
+      )}
+
       <div className="flex items-center justify-between text-xs text-zinc-500 pt-1 border-t border-zinc-100">
         <span className="flex items-center gap-1 text-[11px]">
           <Clock className="w-3 h-3 text-zinc-400" />
@@ -282,15 +377,26 @@ export function OfficerQueuePage() {
         )}
       </div>
 
-      {item.status === 'PENDING' && (
-        <Button
-          size="sm"
-          onClick={() => openDecisionModal(item)}
-          className="w-full mt-2 h-8 text-xs bg-zinc-950 text-white hover:bg-zinc-800"
-        >
-          Review Clearance
-        </Button>
-      )}
+      <div className="flex items-center gap-2 pt-1">
+        {item.status === 'PENDING' && (
+          <Button
+            size="sm"
+            onClick={() => openDecisionModal(item)}
+            className="flex-1 h-8 text-xs bg-zinc-950 text-white hover:bg-zinc-800"
+          >
+            Review Clearance
+          </Button>
+        )}
+        <Link to={`/officer/requests/${item.request_id}`} className="flex-1">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-8 text-xs border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+          >
+            View Dossier
+          </Button>
+        </Link>
+      </div>
     </div>
   )
 
@@ -493,6 +599,11 @@ export function OfficerQueuePage() {
                     className={`text-xs bg-white resize-none ${remarksError ? 'border-rose-500 focus-visible:ring-rose-500' : 'border-border'}`}
                   />
 
+                  {decision === 'APPROVED' && (
+                    <p className="text-[11px] text-zinc-500 leading-snug">
+                      Note: Approving with an explanatory remark such as <span className="font-semibold text-zinc-700">"student did not use this lab"</span> is allowed.
+                    </p>
+                  )}
                   {remarksError && (
                     <p className="text-[11px] text-rose-600 font-medium">{remarksError}</p>
                   )}

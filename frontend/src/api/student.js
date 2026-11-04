@@ -23,10 +23,72 @@ export const studentApi = {
   },
 
   /**
-   * Apply for No-Dues clearance
+   * Apply for No-Dues clearance with optional student declarations
+   * @param {Object} [declarations]
+   * @param {boolean} [declarations.isHosteller]
+   * @param {number[]} [declarations.labCourseIds]
+   * @param {string} [declarations.othersNote]
+   * @param {Object} [declarations.bank]
    */
-  async createRequest() {
-    const response = await api.post('/student/requests')
+  async createRequest(declarations = {}) {
+    const payload = {}
+    if (typeof declarations.isHosteller === 'boolean') {
+      payload.is_hosteller = declarations.isHosteller
+    }
+    if (Array.isArray(declarations.labCourseIds)) {
+      payload.lab_course_ids = declarations.labCourseIds
+    }
+    if (declarations.othersNote !== undefined && declarations.othersNote !== null) {
+      payload.others_note = declarations.othersNote.trim() || null
+    }
+    if (Array.isArray(declarations.otherOfficeIds || declarations.otherDepartmentIds)) {
+      payload.other_office_ids = declarations.otherOfficeIds || declarations.otherDepartmentIds
+    }
+    if (declarations.bank) {
+      payload.bank = {
+        account_number: declarations.bank.accountNumber?.trim(),
+        ifsc_code: declarations.bank.ifscCode?.trim().toUpperCase(),
+        account_holder_name: declarations.bank.accountHolderName?.trim(),
+        bank_address: declarations.bank.bankAddress?.trim(),
+      }
+    }
+
+    const response = await api.post(
+      '/student/requests',
+      Object.keys(payload).length > 0 ? payload : undefined
+    )
+    return response.data
+  },
+
+  /**
+   * Get lab courses catalog and fallback offices for student's programme
+   */
+  async getLabCatalog() {
+    const response = await api.get('/student/lab-catalog')
+    return response.data
+  },
+
+  /**
+   * Add an ASSIGNED_ONLY or applicable department to an active clearance request
+   * @param {number} requestId
+   * @param {number} departmentId
+   */
+  async addDepartment(requestId, departmentId) {
+    const response = await api.post(`/student/requests/${requestId}/departments`, {
+      department_id: departmentId,
+    })
+    return response.data
+  },
+
+  /**
+   * Declare additional lab subjects mid-clearance
+   * @param {number} requestId
+   * @param {number[]} labCourseIds
+   */
+  async declareLabCourses(requestId, labCourseIds) {
+    const response = await api.post(`/student/requests/${requestId}/lab-courses`, {
+      lab_course_ids: labCourseIds,
+    })
     return response.data
   },
 
@@ -62,6 +124,18 @@ export const studentApi = {
   async downloadCertificatePdf(requestId) {
     const response = await api.get(`/student/requests/${requestId}/certificate.pdf`, {
       responseType: 'blob',
+    })
+    return response.data
+  },
+
+  /**
+   * Cancel active clearance request before any office has decided
+   * @param {number} requestId
+   * @param {string} [reason]
+   */
+  async cancelRequest(requestId, reason) {
+    const response = await api.post(`/student/requests/${requestId}/cancel`, {
+      reason: reason?.trim() || null,
     })
     return response.data
   },

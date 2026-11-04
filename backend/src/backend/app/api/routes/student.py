@@ -1,31 +1,48 @@
 """Student clearance endpoints: initiation, tracking, and resubmissions."""
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.orm import joinedload
 
 from backend.app.api.deps import SessionDep, require_roles
 from backend.app.core.config import settings
+from backend.app.core.crypto import encrypt_bank_account
 from backend.app.models.user import User, UserRole
 from backend.app.models.clearance import ClearanceRequest, ApprovalStatus, ClearanceStatus, DepartmentApproval
-from backend.app.models.university import Faculty, Department, Programme
+from backend.app.models.university import Faculty, Department, Programme, DepartmentApplicability, DepartmentKind
+from backend.app.models.lab_course import LabCourse
 from backend.app.models.bank import BankDetail, mask_account_number
 from backend.app.models.certificate import Certificate
-from backend.app.models.roster import StudentRoster
+from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
+from backend.app.models.refund import Refund, RefundStatus
+from backend.app.models.audit import AuditLog
 from backend.app.schemas.workflow import (
     CurrentRequestResponse,
     DepartmentApprovalItem,
+    DeclareLabCoursesRequest,
+    StudentCancelRequest,
 )
 from backend.app.schemas.bank import BankDetailRead, BankDetailUpdate
+from backend.app.schemas.department import (
+    StudentLabCatalogItem,
+    AssignedOnlyDepartmentItem,
+    StudentLabCatalogResponse,
+    AddDepartmentRequest,
+)
 from backend.app.schemas.common import ErrorResponse, MessageResponse
+from pydantic import BaseModel, Field
 from backend.app.services.exceptions import (
     WorkflowNotFoundError,
     WorkflowConflictError,
     WorkflowBadRequestError,
+    WorkflowForbiddenError,
 )
 from backend.app.services.workflow import (
     create_request,
+    add_department_to_request,
+    student_declare_lab_courses,
     resubmit_department,
     student_resubmit_to_hod,
+    student_cancel_request,
 )
 from backend.app.services.certificate_pdf import generate_clearance_certificate_pdf
 
@@ -33,7 +50,7 @@ router = APIRouter(prefix="/student", tags=["Student"])
 require_student = require_roles(UserRole.student)
 
 
-def _format_request_response(req: ClearanceRequest) -> CurrentRequestResponse:
+def _format_request_response(req: ClearanceRequest, db: SessionDep | None = None) -> CurrentRequestResponse:
     approvals = req.approvals or []
     approved_count = sum(1 for a in approvals if a.status == ApprovalStatus.APPROVED)
     total_count = len(approvals)
@@ -49,11 +66,36 @@ def _format_request_response(req: ClearanceRequest) -> CurrentRequestResponse:
             remarks=a.remarks,
             previous_remarks=a.previous_remarks,
             decided_at=a.decided_at,
-            decided_by_name=a.decided_by_user.full_name if a.decided_by_user else None,
+            decided_by_name=a.decided_by_user.full_name or a.decided_by_user.email if a.decided_by_user else None,
+            added_by_user_id=a.added_by_user_id,
+            added_by_name=a.added_by_user.full_name or a.added_by_user.email if a.added_by_user else None,
+            added_reason=a.added_reason,
             resubmission_count=a.resubmission_count,
         )
         for a in approvals
     ]
+
+    refund = req.refund
+    ref_status = refund.status if refund else None
+    dep_amt = refund.deposit_amount if refund else None
+    ded_amt = refund.deductions if refund else None
+    fin_amt = refund.final_amount if refund else None
+    pay_ref = None
+
+    if refund and refund.status == RefundStatus.PROCESSED:
+        pay_ref = getattr(refund, "payment_reference", None)
+        if not pay_ref and db is not None:
+            audit_entry = db.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.entity_type == "clearance_requests",
+                    AuditLog.entity_id == req.id,
+                    AuditLog.action == "MARK_REFUND_PROCESSED",
+                )
+                .order_by(AuditLog.created_at.desc())
+            ).scalars().first()
+            if audit_entry and audit_entry.details:
+                pay_ref = audit_entry.details.get("payment_reference")
 
     return CurrentRequestResponse(
         id=req.id,
@@ -62,7 +104,26 @@ def _format_request_response(req: ClearanceRequest) -> CurrentRequestResponse:
         submitted_at=req.submitted_at,
         hod_remarks=req.hod_remarks,
         approvals=approval_items,
+        refund_status=ref_status,
+        deposit_amount=dep_amt,
+        deductions=ded_amt,
+        final_amount=fin_amt,
+        payment_reference=pay_ref,
     )
+
+
+class StudentClearanceApply(BaseModel):
+    """Declarations submitted when applying for clearance."""
+    is_hosteller: bool = Field(False, description="Declare whether student resided in university hostel")
+    lab_course_ids: list[int] | None = Field(None, description="Declared lab course IDs (mapped to their lab offices)", examples=[[1, 2]])
+    other_department_ids: list[int] | None = Field(None, alias="other_office_ids", description="Optional list of additional ASSIGNED_ONLY department/office IDs", examples=[[26, 27]])
+    others_note: str | None = Field(None, max_length=1000, description="Optional note for any additional dues/facilities")
+    bank: BankDetailUpdate | None = Field(None, description="Student refund bank details (if not already set)")
+
+    model_config = {
+        "populate_by_name": True,
+        "extra": "ignore",
+    }
 
 
 @router.post(
@@ -72,29 +133,62 @@ def _format_request_response(req: ClearanceRequest) -> CurrentRequestResponse:
     operation_id="create_clearance_request",
     summary="Apply for No-Dues Clearance",
     description=(
-        "Student initiates a clearance application. The system automatically creates parallel clearance "
-        "reviews for all applicable departments (always-applicable, hosteller if relevant, assigned labs/workshops, "
+        "Student initiates a clearance application from their declarations. The system automatically creates parallel clearance "
+        "reviews for all applicable departments (always-applicable, hosteller if declared, declared labs/workshops, "
         "and their own academic department) and registers a refund entry. Only one active request is allowed."
     ),
     responses={
-        400: {"model": ErrorResponse, "description": "Student profile or roster missing"},
+        400: {"model": ErrorResponse, "description": "Student profile or roster missing, or bank details missing"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-student roles"},
-        409: {"model": ErrorResponse, "description": "Student already has an active clearance request"},
+        409: {"model": ErrorResponse, "description": "Student already has an active clearance request, or office lacks active officer"},
     },
 )
 def apply_clearance(
     db: SessionDep,
     student_user: User = Depends(require_student),
+    body: StudentClearanceApply | None = None,
 ) -> CurrentRequestResponse:
+    if body and body.bank and student_user.roster_id:
+        roster = db.get(StudentRoster, student_user.roster_id)
+        if roster:
+            enc_acc = encrypt_bank_account(body.bank.account_number.strip())
+            bank = db.execute(
+                select(BankDetail).where(BankDetail.roster_id == roster.id)
+            ).scalars().first()
+            if bank:
+                bank.account_holder_name = body.bank.account_holder_name.strip()
+                bank.account_number = enc_acc
+                bank.ifsc_code = body.bank.ifsc_code.strip().upper()
+                bank.bank_address = body.bank.bank_address.strip()
+            else:
+                bank = BankDetail(
+                    roster_id=roster.id,
+                    account_holder_name=body.bank.account_holder_name.strip(),
+                    account_number=enc_acc,
+                    ifsc_code=body.bank.ifsc_code.strip().upper(),
+                    bank_address=body.bank.bank_address.strip(),
+                )
+                db.add(bank)
+            db.commit()
+
     try:
-        req = create_request(db, student_user)
-        return _format_request_response(req)
+        other_ids = body.other_department_ids if body else None
+        req = create_request(
+            session=db,
+            student_user=student_user,
+            declared_is_hosteller=bool(body.is_hosteller) if body else False,
+            declared_lab_course_ids=body.lab_course_ids if body else None,
+            other_department_ids=other_ids,
+            others_note=body.others_note if body else None,
+        )
+        return _format_request_response(req, db)
     except WorkflowConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.message)
     except WorkflowBadRequestError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
     except WorkflowNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+
 
 
 @router.get(
@@ -122,6 +216,7 @@ def get_current_request(
         .options(
             joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.department),
             joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.decided_by_user),
+            joinedload(ClearanceRequest.refund),
         )
         .order_by(ClearanceRequest.created_at.desc())
     ).unique().scalars().first()
@@ -132,7 +227,7 @@ def get_current_request(
             detail="No clearance request found for your account.",
         )
 
-    return _format_request_response(req)
+    return _format_request_response(req, db)
 
 
 @router.post(
@@ -200,11 +295,81 @@ def resubmit_to_hod_endpoint(
 ) -> CurrentRequestResponse:
     try:
         req = student_resubmit_to_hod(db, student_user, request_id)
-        return _format_request_response(req)
+        return _format_request_response(req, db)
     except WorkflowNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
     except WorkflowConflictError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.message)
+
+
+@router.post(
+    "/requests/{request_id}/lab-courses",
+    response_model=CurrentRequestResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="declare_additional_lab_courses",
+    summary="Declare Additional Lab Subjects",
+    description=(
+        "Student declares additional laboratory subjects while their clearance request is active. "
+        "Any newly declared subject belonging to an unassigned lab office automatically triggers a pending clearance review."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid lab course list"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-student roles"},
+        404: {"model": ErrorResponse, "description": "Clearance request not found"},
+        409: {"model": ErrorResponse, "description": "Clearance request is already finalized or lab department lacks active officer"},
+    },
+)
+def declare_additional_lab_courses(
+    request_id: int,
+    body: DeclareLabCoursesRequest,
+    db: SessionDep,
+    student_user: User = Depends(require_student),
+) -> CurrentRequestResponse:
+    try:
+        req = student_declare_lab_courses(
+            session=db,
+            student_user=student_user,
+            request_id=request_id,
+            lab_course_ids=body.lab_course_ids,
+        )
+        return _format_request_response(req, db)
+    except WorkflowNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    except WorkflowConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.message)
+    except WorkflowBadRequestError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+
+
+@router.post(
+    "/requests/{request_id}/cancel",
+    response_model=CurrentRequestResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="student_cancel_clearance_request",
+    summary="Cancel Clearance Request",
+    description="Allows a student to cancel their clearance request provided all departmental approvals are still in PENDING status.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Cannot cancel: some approvals have already been decided or request finalized"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-student roles or requests belonging to another student"},
+        404: {"model": ErrorResponse, "description": "Clearance request not found"},
+    },
+)
+def cancel_clearance_request(
+    request_id: int,
+    db: SessionDep,
+    student_user: User = Depends(require_student),
+    body: StudentCancelRequest | None = None,
+) -> CurrentRequestResponse:
+    try:
+        reason = body.reason if body else None
+        req = student_cancel_request(db, request_id, student_user, reason)
+        return _format_request_response(req, db)
+    except WorkflowNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    except WorkflowBadRequestError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+    except WorkflowForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=e.message)
 
 
 @router.get(
@@ -271,16 +436,17 @@ def update_bank_details(
         select(BankDetail).where(BankDetail.roster_id == student_user.roster_id)
     ).scalars().first()
 
+    enc_acc = encrypt_bank_account(body.account_number.strip())
     if bank:
         bank.account_holder_name = body.account_holder_name.strip()
-        bank.account_number = body.account_number.strip()
+        bank.account_number = enc_acc
         bank.ifsc_code = body.ifsc_code.strip().upper()
         bank.bank_address = body.bank_address.strip()
     else:
         bank = BankDetail(
             roster_id=student_user.roster_id,
             account_holder_name=body.account_holder_name.strip(),
-            account_number=body.account_number.strip(),
+            account_number=enc_acc,
             ifsc_code=body.ifsc_code.strip().upper(),
             bank_address=body.bank_address.strip(),
         )
@@ -401,4 +567,132 @@ def download_certificate_pdf(
             "Content-Disposition": f'inline; filename="clearance_certificate_{cert_code}.pdf"',
         },
     )
+
+
+@router.get(
+    "/lab-catalog",
+    response_model=StudentLabCatalogResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="get_student_lab_catalog",
+    summary="Get Available Lab Courses and Fallback Offices",
+    description="Returns active lab courses for the student's academic programme, plus all ASSIGNED_ONLY service departments.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Student roster profile not found"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-students"},
+        404: {"model": ErrorResponse, "description": "Student programme not found"},
+    },
+)
+@router.get(
+    "/lab-courses",
+    response_model=StudentLabCatalogResponse,
+    status_code=status.HTTP_200_OK,
+    include_in_schema=False,
+)
+def get_student_lab_catalog(
+    db: SessionDep,
+    student_user: User = Depends(require_student),
+) -> StudentLabCatalogResponse:
+    if not student_user.roster_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Student roster profile not found")
+    roster = db.get(StudentRoster, student_user.roster_id)
+    if not roster or not roster.programme:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student academic programme not found")
+
+    academic_dept_id = roster.programme.academic_department_id
+
+    courses = db.execute(
+        select(LabCourse)
+        .where(
+            or_(
+                LabCourse.academic_department_id == academic_dept_id,
+                LabCourse.academic_department_id.is_(None),
+            ),
+            LabCourse.is_active == True,
+        )
+        .options(joinedload(LabCourse.lab_department))
+        .order_by(LabCourse.code.asc())
+    ).scalars().all()
+
+    catalog_items = [
+        StudentLabCatalogItem(
+            id=c.id,
+            code=c.code,
+            name=c.name,
+            lab_department_id=c.lab_department_id,
+            lab_department_name=c.lab_department.name if c.lab_department else f"Department #{c.lab_department_id}",
+            specialization=c.specialization,
+        )
+        for c in courses
+    ]
+
+    assigned_depts = db.execute(
+        select(Department)
+        .where(
+            Department.applicability == DepartmentApplicability.ASSIGNED_ONLY,
+            Department.kind == DepartmentKind.service,
+        )
+        .order_by(Department.name.asc())
+    ).scalars().all()
+
+    assigned_items = [
+        AssignedOnlyDepartmentItem(
+            id=d.id,
+            name=d.name,
+            description=d.description,
+        )
+        for d in assigned_depts
+    ]
+
+    return StudentLabCatalogResponse(
+        lab_courses=catalog_items,
+        assigned_only_departments=assigned_items,
+    )
+
+
+@router.post(
+    "/requests/{request_id}/departments",
+    response_model=DepartmentApprovalItem,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="add_department_to_clearance_request",
+    summary="Add Department to Active Clearance Request",
+    description="Adds an ASSIGNED_ONLY or applicable department to an active clearance request. Fails with 409 if department already added or has no active dealing officer.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid department or request"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-students"},
+        404: {"model": ErrorResponse, "description": "Request or department not found"},
+        409: {"model": ErrorResponse, "description": "Department already added, or has no active dealing officer"},
+    },
+)
+def add_department_endpoint(
+    request_id: int,
+    body: AddDepartmentRequest,
+    db: SessionDep,
+    student_user: User = Depends(require_student),
+) -> DepartmentApprovalItem:
+    try:
+        approval = add_department_to_request(
+            session=db,
+            request_id=request_id,
+            department_id=body.department_id,
+            acting_user=student_user,
+        )
+        return DepartmentApprovalItem(
+            id=approval.id,
+            department_id=approval.department_id,
+            department_name=approval.department.name if approval.department else f"Department #{approval.department_id}",
+            department_kind=approval.department.kind.value if approval.department else "service",
+            status=approval.status,
+            remarks=approval.remarks,
+            previous_remarks=approval.previous_remarks,
+            decided_at=approval.decided_at,
+            decided_by_name=None,
+            resubmission_count=approval.resubmission_count,
+        )
+    except WorkflowNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    except WorkflowConflictError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=e.message)
+    except WorkflowBadRequestError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+
 

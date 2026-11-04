@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from '@/auth/AuthContext'
 import { ProtectedRoute } from '@/auth/ProtectedRoute'
@@ -12,16 +12,26 @@ const LandingPage = lazy(() => import('@/pages/public/LandingPage'))
 const LoginPage = lazy(() => import('@/pages/public/LoginPage'))
 const SignupPage = lazy(() => import('@/pages/public/SignupPage'))
 const VerifyPage = lazy(() => import('@/pages/public/VerifyPage'))
+const HelpPage = lazy(() => import('@/pages/public/HelpPage'))
+const ChangePasswordPage = lazy(() => import('@/pages/public/ChangePasswordPage'))
 const NotFoundPage = lazy(() => import('@/pages/public/NotFoundPage'))
 const ForbiddenPage = lazy(() => import('@/pages/public/ForbiddenPage'))
 
 // Lazy-loaded Protected Dashboard Views
 const StudentDashboard = lazy(() => import('@/pages/student/StudentDashboard'))
+const StudentApplyPage = lazy(() => import('@/pages/student/StudentApplyPage'))
 const OfficerQueuePage = lazy(() => import('@/pages/officer/OfficerQueuePage'))
+const OfficerRosterPage = lazy(() => import('@/pages/officer/OfficerRosterPage'))
+const OfficerLabCatalogPage = lazy(() => import('@/pages/officer/OfficerLabCatalogPage'))
+const OfficerRequestDetailPage = lazy(() => import('@/pages/officer/OfficerRequestDetailPage'))
 const HodQueuePage = lazy(() => import('@/pages/hod/HodQueuePage'))
 const HodRequestDetailPage = lazy(() => import('@/pages/hod/HodRequestDetailPage'))
 const RegistrarRefundPage = lazy(() => import('@/pages/registrar/RegistrarRefundPage'))
-const AdminDashboardPage = lazy(() => import('@/pages/admin/AdminDashboardPage'))
+const RegistrarRequestDetailPage = lazy(() => import('@/pages/registrar/RegistrarRequestDetailPage'))
+const AdminOfficesPage = lazy(() => import('@/pages/admin/AdminOfficesPage'))
+const AdminUsersPage = lazy(() => import('@/pages/admin/AdminUsersPage'))
+const AdminRosterPage = lazy(() => import('@/pages/admin/AdminRosterPage'))
+const AdminLabCoursesPage = lazy(() => import('@/pages/admin/AdminLabCoursesPage'))
 
 function RouteFallback() {
   return (
@@ -67,6 +77,17 @@ export default function App() {
                 <Route path="/signup" element={<SignupPage />} />
                 <Route path="/verify" element={<VerifyPage />} />
                 <Route path="/verify/:code" element={<VerifyPage />} />
+                <Route path="/help" element={<HelpPage />} />
+
+                {/* Authenticated Global Route */}
+                <Route
+                  path="/change-password"
+                  element={
+                    <ProtectedRoute>
+                      <ChangePasswordPage />
+                    </ProtectedRoute>
+                  }
+                />
 
                 {/* Role-Protected Routes */}
                 <Route
@@ -77,12 +98,44 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
+                <Route
+                  path="/student/apply"
+                  element={
+                    <ProtectedRoute allowedRoles={['student']}>
+                      <StudentApplyPage />
+                    </ProtectedRoute>
+                  }
+                />
 
                 <Route
                   path="/officer"
                   element={
                     <ProtectedRoute allowedRoles={['dept_officer']}>
                       <OfficerQueuePage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/officer/roster"
+                  element={
+                    <ProtectedRoute allowedRoles={['dept_officer']}>
+                      <OfficerRosterPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/officer/lab-catalog"
+                  element={
+                    <ProtectedRoute allowedRoles={['dept_officer']}>
+                      <OfficerLabCatalogPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/officer/requests/:id"
+                  element={
+                    <ProtectedRoute allowedRoles={['dept_officer']}>
+                      <OfficerRequestDetailPage />
                     </ProtectedRoute>
                   }
                 />
@@ -113,12 +166,48 @@ export default function App() {
                     </ProtectedRoute>
                   }
                 />
+                <Route
+                  path="/registrar/requests/:id"
+                  element={
+                    <ProtectedRoute allowedRoles={['registrar_accounts']}>
+                      <RegistrarRequestDetailPage />
+                    </ProtectedRoute>
+                  }
+                />
 
                 <Route
                   path="/admin"
+                  element={<Navigate to="/admin/offices" replace />}
+                />
+                <Route
+                  path="/admin/offices"
                   element={
                     <ProtectedRoute allowedRoles={['admin']}>
-                      <AdminDashboardPage />
+                      <AdminOfficesPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/users"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin']}>
+                      <AdminUsersPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/roster"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin']}>
+                      <AdminRosterPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/lab-courses"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin']}>
+                      <AdminLabCoursesPage />
                     </ProtectedRoute>
                   }
                 />

@@ -3,7 +3,7 @@ import enum
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, Boolean, ForeignKey,
-    Enum as SAEnum, DateTime, CheckConstraint, Index
+    Enum as SAEnum, DateTime, CheckConstraint, Index, text
 )
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
@@ -23,13 +23,18 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String(255), nullable=False, unique=True)
     full_name = Column(String(255), nullable=True)
-    password_hash = Column(String(255), nullable=False)
+    password_hash = Column(String(255), nullable=True)
+    google_sub = Column(String(255), nullable=True, unique=True)
     role = Column(SAEnum(UserRole, name="user_role"), nullable=False)
     department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
     roster_id = Column(
         Integer, ForeignKey("student_roster.id"), nullable=True, unique=True
     )
     is_active = Column(Boolean, nullable=False, default=True)
+    must_change_password = Column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(
         DateTime(timezone=True),
         nullable=False,
@@ -50,10 +55,11 @@ class User(Base):
         Index("ix_users_email", "email"),
         Index("ix_users_department_id", "department_id"),
         Index("ix_users_roster_id", "roster_id"),
+        Index("ix_users_google_sub", "google_sub"),
     )
 
     department = relationship("Department", back_populates="users")
-    roster_entry = relationship("StudentRoster", back_populates="user")
+    roster_entry = relationship("StudentRoster", back_populates="user", foreign_keys=[roster_id])
     hod_clearances = relationship(
         "ClearanceRequest", back_populates="hod_user",
         foreign_keys="ClearanceRequest.hod_user_id"

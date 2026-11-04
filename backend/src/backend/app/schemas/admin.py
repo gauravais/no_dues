@@ -71,6 +71,11 @@ class AdminCreateUserRequest(BaseModel):
         description="Assigned department ID (Mandatory for dept_officer and hod; academic only for hod)",
         examples=[4],
     )
+    google_only: bool = Field(
+        False,
+        description="When true, account has no password and authenticates exclusively via university Google account",
+        examples=[False],
+    )
 
 
 class AdminUserResponse(BaseModel):
@@ -116,3 +121,50 @@ class AdminUserListItem(BaseModel):
     department_id: int | None = None
     is_active: bool
     created_at: datetime
+
+
+class AdminOfficeUserSummary(BaseModel):
+    """Summary of an officer or HoD user."""
+    id: int
+    name: str | None = None
+    email: str
+
+
+class AdminOfficeSummary(BaseModel):
+    """Department/office status for university administrators."""
+    id: int
+    name: str
+    kind: str = Field(..., description="academic | service")
+    applicability: str
+    description: str | None = None
+    active_officers: list[AdminOfficeUserSummary]
+    hod: AdminOfficeUserSummary | None = None
+    missing_officer: bool = Field(..., description="True if department has no active dealing officer")
+    missing_hod: bool = Field(..., description="True if academic department has no active HoD")
+
+
+class AdminOfficeListResponse(BaseModel):
+    """List of all university departments and their staffing status."""
+    total: int
+    items: list[AdminOfficeSummary]
+
+
+class AdminUserBulkUploadDetail(BaseModel):
+    """Row processing result in bulk user provisioning."""
+    row_number: int
+    email: str
+    status: str = Field(..., description="created | rejected")
+    reason: str | None = None
+    temporary_password: str | None = Field(
+        None,
+        description="One-time temporary password (only returned in this response)",
+    )
+
+
+class AdminUserBulkUploadResponse(BaseModel):
+    """Aggregate response for admin bulk user upload."""
+    total_rows: int
+    created_count: int
+    rejected_count: int
+    rows: list[AdminUserBulkUploadDetail]
+

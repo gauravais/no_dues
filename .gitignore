@@ -10,6 +10,7 @@ __pycache__/
 *$py.class
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 
@@ -23,3 +24,31 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# Database dumps and backups
+*.sql
+*.dump
+*.bak
+*.backup
+backups/
+
+# Sensitive data and pilot roster CSVs
+*pilot*.csv
+roster*.csv
+labs*.csv
+*.csv
+
+# Certificates and keys
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# Scratch & audit scripts
+audit_results.json
+audit_contract.py
+check_*.py
+test_live_workflow.py
+run_live_lifecycle_test.py
+

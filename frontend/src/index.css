@@ -1,8 +1,8 @@
 @import "tw-animate-css";
 @import "@fontsource-variable/geist";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@tailwind base; /* wording-ok */
+@tailwind components; /* wording-ok */
+@tailwind utilities; /* wording-ok */
 
 @layer base {
   :root {

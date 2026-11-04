@@ -1,5 +1,5 @@
 import React from 'react'
-import { Check, Clock, AlertTriangle, ShieldCheck, FileCheck } from 'lucide-react'
+import { Check, Clock, AlertTriangle, ShieldCheck, FileCheck, XCircle } from 'lucide-react'
 
 export function StepTimeline({ status, approvals = [], hodRemarks = null }) {
   // Determine status of each step:
@@ -8,6 +8,7 @@ export function StepTimeline({ status, approvals = [], hodRemarks = null }) {
   // Step 3: Chairperson / HoD Clearance
   // Step 4: Certificate & Refund
 
+  const isCancelled = status === 'CANCELLED'
   const hasRejectedDepts = approvals.some((a) => a.status === 'REJECTED')
   const allDeptsApproved =
     approvals.length > 0 && approvals.every((a) => a.status === 'APPROVED')
@@ -16,20 +17,24 @@ export function StepTimeline({ status, approvals = [], hodRemarks = null }) {
     {
       id: 'submitted',
       title: 'Applied',
-      subtitle: 'Dispatched to departments',
+      subtitle: isCancelled ? 'Request Cancelled' : 'Dispatched to departments',
       icon: Check,
       state: 'complete',
     },
     {
       id: 'departments',
       title: 'Departments',
-      subtitle: hasRejectedDepts
+      subtitle: isCancelled
+        ? 'Request Cancelled'
+        : hasRejectedDepts
         ? 'Dues / Action Required'
         : allDeptsApproved
         ? 'All Departments Cleared'
         : 'Parallel Reviews Pending',
-      icon: hasRejectedDepts ? AlertTriangle : allDeptsApproved ? Check : Clock,
-      state: hasRejectedDepts
+      icon: isCancelled ? XCircle : hasRejectedDepts ? AlertTriangle : allDeptsApproved ? Check : Clock,
+      state: isCancelled
+        ? 'pending'
+        : hasRejectedDepts
         ? 'warning'
         : allDeptsApproved
         ? 'complete'
@@ -38,45 +43,50 @@ export function StepTimeline({ status, approvals = [], hodRemarks = null }) {
     {
       id: 'hod',
       title: 'HoD Review',
-      subtitle:
-        status === 'CLEARED' || status === 'REFUND_VERIFIED'
-          ? 'Chairperson Approved'
-          : status === 'ACTION_NEEDED' && !hasRejectedDepts && hodRemarks
-          ? 'HoD Action Needed'
-          : status === 'HOD_REVIEW'
-          ? 'Awaiting HoD Decision'
-          : 'Pending Department Approvals',
-      icon:
-        status === 'CLEARED' || status === 'REFUND_VERIFIED'
-          ? Check
-          : status === 'ACTION_NEEDED' && !hasRejectedDepts
-          ? AlertTriangle
-          : ShieldCheck,
-      state:
-        status === 'CLEARED' || status === 'REFUND_VERIFIED'
-          ? 'complete'
-          : status === 'HOD_REVIEW'
-          ? 'active'
-          : status === 'ACTION_NEEDED' && !hasRejectedDepts
-          ? 'warning'
-          : 'pending',
+      subtitle: isCancelled
+        ? 'Request Cancelled'
+        : status === 'CLEARED' || status === 'REFUND_VERIFIED'
+        ? 'Chairperson Approved'
+        : status === 'ACTION_NEEDED' && !hasRejectedDepts && hodRemarks
+        ? 'HoD Action Needed'
+        : status === 'HOD_REVIEW'
+        ? 'Awaiting HoD Decision'
+        : 'Pending Department Approvals',
+      icon: isCancelled
+        ? XCircle
+        : status === 'CLEARED' || status === 'REFUND_VERIFIED'
+        ? Check
+        : status === 'ACTION_NEEDED' && !hasRejectedDepts
+        ? AlertTriangle
+        : ShieldCheck,
+      state: isCancelled
+        ? 'pending'
+        : status === 'CLEARED' || status === 'REFUND_VERIFIED'
+        ? 'complete'
+        : status === 'HOD_REVIEW'
+        ? 'active'
+        : status === 'ACTION_NEEDED' && !hasRejectedDepts
+        ? 'warning'
+        : 'pending',
     },
     {
       id: 'refund',
       title: 'Cleared & Refund',
-      subtitle:
-        status === 'REFUND_VERIFIED'
-          ? 'Refund Verified'
-          : status === 'CLEARED'
-          ? 'Certificate Issued'
-          : 'Pending Final Clearance',
-      icon: FileCheck,
-      state:
-        status === 'REFUND_VERIFIED'
-          ? 'complete'
-          : status === 'CLEARED'
-          ? 'active'
-          : 'pending',
+      subtitle: isCancelled
+        ? 'Request Cancelled'
+        : status === 'REFUND_VERIFIED'
+        ? 'Refund Verified'
+        : status === 'CLEARED'
+        ? 'Certificate Issued'
+        : 'Pending Final Clearance',
+      icon: isCancelled ? XCircle : FileCheck,
+      state: isCancelled
+        ? 'pending'
+        : status === 'REFUND_VERIFIED'
+        ? 'complete'
+        : status === 'CLEARED'
+        ? 'active'
+        : 'pending',
     },
   ]
 

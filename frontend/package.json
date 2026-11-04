@@ -5,9 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && npm run check:leaks && npm run check:wording",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:contract": "node scripts/check_contract.mjs",
+    "check:leaks": "node scripts/check_leaks.mjs",
+    "check:wording": "node scripts/check_wording.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.3.0",

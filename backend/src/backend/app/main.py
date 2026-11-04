@@ -2,13 +2,17 @@
 FastAPI application entrypoint for Shri Vishwakarma Skill University (SVSU)
 No-Dues Clearance & Security Deposit Refund System.
 """
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, HTTPException, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import text
 
-from backend.app.api.routes import auth, student, department, hod, verify, registrar, admin, departments
+from backend.app.api.deps import SessionDep
+from backend.app.api.routes import auth, student, department, hod, verify, registrar, admin, departments, internal_jobs
 from backend.app.core.config import settings
+from backend.app.schemas.common import ErrorResponse
 
 APP_DESCRIPTION = """
 ### University No-Dues Clearance & Security Deposit Refund System
@@ -52,7 +56,7 @@ TAGS_METADATA = [
     },
     {
         "name": "Department Officer",
-        "description": "Review and decision workflow for departmental officers (Library, Hostel, Labs, Workshops, etc.).",
+        "description": "Review and decision workflow for departmental officers (Library, Hostel, Labs, Workshops, etc.), plus academic roster and lab catalog delegation.",
     },
     {
         "name": "HoD",
@@ -116,6 +120,71 @@ app.include_router(verify.router)
 app.include_router(registrar.router)
 app.include_router(admin.router)
 app.include_router(departments.router)
+app.include_router(internal_jobs.router)
+
+
+class LiveHealthResponse(BaseModel):
+    status: str = Field("ok", description="Process liveness status", examples=["ok"])
+    environment: str = Field(..., description="Runtime environment name", examples=["production"])
+
+
+class HealthCheckResponse(BaseModel):
+    status: str = Field("ok", description="Application service status", examples=["ok"])
+    database: str = Field("connected", description="Database connectivity status", examples=["connected"])
+    environment: str = Field(..., description="Runtime environment name", examples=["development"])
+
+
+@app.get(
+    "/health/live",
+    response_model=LiveHealthResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Health"],
+    summary="Application Process Liveness Probe",
+    description=(
+        "Lightweight process liveness probe for cloud platform orchestrators (e.g. Render health checks). "
+        "Never queries the database, allowing serverless databases (Neon) to suspend when idle."
+    ),
+    responses={
+        200: {"description": "Application process is alive and accepting traffic"},
+    },
+)
+def health_live() -> LiveHealthResponse:
+    return LiveHealthResponse(
+        status="ok",
+        environment=settings.APP_ENV,
+    )
+
+
+@app.get(
+    "/health",
+    response_model=HealthCheckResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Health"],
+    summary="System and Database Health Check",
+    description=(
+        "Performs a live connectivity probe against the PostgreSQL database. "
+        "Returns 200 OK with connected status, or 503 Service Unavailable if unreachable. "
+        "IMPORTANT: Do NOT poll this endpoint with automated health monitors or cron jobs around the clock, "
+        "as doing so prevents serverless databases (e.g. Neon) from suspending idle compute."
+    ),
+    responses={
+        200: {"description": "System and database are operational"},
+        503: {"model": ErrorResponse, "description": "Database connectivity probe failed"},
+    },
+)
+def health_check(db: SessionDep) -> HealthCheckResponse:
+    try:
+        db.execute(text("SELECT 1"))
+        return HealthCheckResponse(
+            status="ok",
+            database="connected",
+            environment=settings.APP_ENV,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database health probe failed: {str(exc)}",
+        )
 
 
 @app.get("/", tags=["Health"], include_in_schema=False)

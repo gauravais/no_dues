@@ -11,11 +11,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from backend.app.models.university import (
     Department,
+    DepartmentKind,
     Programme,
     DepartmentApplicability,
 )
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
-from backend.app.models.user import User
+from backend.app.models.lab_course import LabCourse
+from backend.app.models.user import User, UserRole
 from backend.app.models.clearance import (
     ClearanceRequest,
     DepartmentApproval,
@@ -29,15 +31,33 @@ from backend.app.services.exceptions import (
     WorkflowNotFoundError,
     WorkflowConflictError,
     WorkflowBadRequestError,
+    WorkflowForbiddenError,
+)
+from backend.app.services.email import (
+    notify_officers_new_request,
+    notify_student_rejection,
+    notify_hod_all_approved,
+    notify_student_hod_rejected,
+    notify_hod_approved,
+    notify_department_added,
+    notify_request_cancelled,
 )
 
 
-def get_applicable_departments(session: Session, roster: StudentRoster) -> list[Department]:
+def get_applicable_departments(
+    session: Session,
+    roster: StudentRoster,
+    declared_is_hosteller: bool = False,
+    declared_lab_courses: Sequence[LabCourse] | None = None,
+    other_departments: Sequence[Department] | None = None,
+) -> list[Department]:
     """
-    Computes all applicable departments for a student:
+    Computes all applicable departments for a student from declarations:
     - ALWAYS: all departments with applicability ALWAYS
-    - HOSTELLER_ONLY: if student roster is_hosteller == True
-    - ASSIGNED_ONLY: only departments mapped in roster_assigned_departments for this student
+    - HOSTELLER_ONLY: if student's DECLARATION declared_is_hosteller == True
+    - Assigned lab departments from declared_lab_courses (LabCourse.lab_department_id)
+    - Optional other ASSIGNED_ONLY offices declared by student
+    - Optional admin override: only departments mapped in roster_assigned_departments for this student
     - OWN_ACADEMIC: student's own academic department (via programme -> academic_department_id)
     """
     # 1. ALWAYS departments
@@ -45,28 +65,36 @@ def get_applicable_departments(session: Session, roster: StudentRoster) -> list[
         select(Department).where(Department.applicability == DepartmentApplicability.ALWAYS)
     ).scalars().all()
 
-    # 2. HOSTELLER_ONLY departments
+    # 2. HOSTELLER_ONLY departments (computed from declaration with roster fallback)
     hostel_depts: Sequence[Department] = []
-    if roster.is_hosteller:
+    effective_is_hosteller = declared_is_hosteller if declared_is_hosteller is not None else roster.is_hosteller
+    if effective_is_hosteller:
         hostel_depts = session.execute(
             select(Department).where(Department.applicability == DepartmentApplicability.HOSTELLER_ONLY)
         ).scalars().all()
 
-    # 3. ASSIGNED_ONLY departments
-    assigned_depts = session.execute(
-        select(Department)
-        .join(RosterAssignedDepartment, RosterAssignedDepartment.department_id == Department.id)
-        .where(
-            RosterAssignedDepartment.roster_id == roster.id,
-            Department.applicability == DepartmentApplicability.ASSIGNED_ONLY,
-        )
+    # 3. Lab departments from declared subjects
+    lab_dept_ids = set()
+    if declared_lab_courses:
+        for lc in declared_lab_courses:
+            lab_dept_ids.add(lc.lab_department_id)
+
+    # Optional admin override mappings
+    assigned_records = session.execute(
+        select(RosterAssignedDepartment.department_id).where(RosterAssignedDepartment.roster_id == roster.id)
     ).scalars().all()
+    for did in assigned_records:
+        lab_dept_ids.add(did)
+
+    assigned_depts: Sequence[Department] = []
+    if lab_dept_ids:
+        assigned_depts = session.execute(
+            select(Department).where(Department.id.in_(lab_dept_ids))
+        ).scalars().all()
 
     # 4. Student's OWN_ACADEMIC department
-    # Load programme if not already populated
     prog = roster.programme
     if not prog:
-        from backend.app.models.university import Programme
         prog = session.get(Programme, roster.programme_id)
     
     academic_dept = session.get(Department, prog.academic_department_id)
@@ -75,7 +103,7 @@ def get_applicable_departments(session: Session, roster: StudentRoster) -> list[
 
     # Combine unique departments by ID
     dept_map: dict[int, Department] = {}
-    for d in list(always_depts) + list(hostel_depts) + list(assigned_depts) + [academic_dept]:
+    for d in list(always_depts) + list(hostel_depts) + list(assigned_depts) + list(other_departments or []) + [academic_dept]:
         dept_map[d.id] = d
 
     return sorted(list(dept_map.values()), key=lambda x: x.id)
@@ -131,14 +159,21 @@ def _record_audit(
     session.add(audit)
 
 
-def create_request(session: Session, student_user: User) -> ClearanceRequest:
+def create_request(
+    session: Session,
+    student_user: User,
+    declared_is_hosteller: bool | None = None,
+    declared_lab_course_ids: list[int] | None = None,
+    other_department_ids: list[int] | None = None,
+    others_note: str | None = None,
+) -> ClearanceRequest:
     """
-    Creates a clearance request for the student.
+    Creates a clearance request for the student from their declarations.
     Refuses if student already has a request whose status is not REFUND_VERIFIED (409 Conflict).
     Creates:
-    - 1 clearance_requests (SUBMITTED)
+    - 1 clearance_requests (SUBMITTED) with declared_is_hosteller, others_note, declared_lab_courses
     - 1 department_approvals per applicable department (PENDING)
-    - 1 refunds row (PENDING_VERIFICATION, deposit from roster, deductions 0, final = deposit)
+    - 1 refunds row (PENDING_VERIFICATION)
     """
     if not student_user.roster_id:
         raise WorkflowBadRequestError("Student user has no linked roster profile.")
@@ -160,23 +195,118 @@ def create_request(session: Session, student_user: User) -> ClearanceRequest:
     existing_active = session.execute(
         select(ClearanceRequest).where(
             ClearanceRequest.roster_id == roster.id,
-            ClearanceRequest.status != ClearanceStatus.REFUND_VERIFIED,
+            ClearanceRequest.status.not_in([ClearanceStatus.REFUND_VERIFIED, ClearanceStatus.CANCELLED]),
         )
     ).scalars().first()
 
     if existing_active:
         raise WorkflowConflictError("Student already has an active clearance request.")
 
-    applicable_depts = get_applicable_departments(session, roster)
+    # Validate active HoD for academic department
+    prog = roster.programme
+    if not prog:
+        prog = session.get(Programme, roster.programme_id)
+    if not prog:
+        raise WorkflowNotFoundError(f"Programme {roster.programme_id} not found.")
+
+    academic_dept = session.get(Department, prog.academic_department_id)
+    if not academic_dept:
+        raise WorkflowNotFoundError(f"Academic department {prog.academic_department_id} not found.")
+
+    active_hod = session.execute(
+        select(User.id).where(
+            User.role == UserRole.hod,
+            User.department_id == academic_dept.id,
+            User.is_active == True,
+        )
+    ).first()
+    if not active_hod:
+        raise WorkflowConflictError(
+            f"Academic department '{academic_dept.name}' has no active Head of Department (HoD). Cannot submit clearance request."
+        )
+
+    declared_courses = []
+    if declared_lab_course_ids:
+        declared_courses = session.execute(
+            select(LabCourse).where(
+                LabCourse.id.in_(declared_lab_course_ids),
+                LabCourse.is_active == True,
+            )
+        ).scalars().all()
+
+    # Validate other ASSIGNED_ONLY offices
+    other_depts = []
+    if other_department_ids:
+        for did in other_department_ids:
+            d = session.get(Department, did)
+            if not d:
+                raise WorkflowNotFoundError(f"Department ID {did} not found.")
+
+            # 1. only ASSIGNED_ONLY offices
+            if d.applicability != DepartmentApplicability.ASSIGNED_ONLY:
+                raise WorkflowBadRequestError(
+                    f"Department '{d.name}' cannot be declared as an other office. Only ASSIGNED_ONLY departments are allowed."
+                )
+
+            # 2. not linked to a lab subject
+            linked_course = session.execute(
+                select(LabCourse.id).where(LabCourse.lab_department_id == d.id)
+            ).first()
+            if linked_course:
+                raise WorkflowBadRequestError(
+                    f"Department '{d.name}' is linked to a lab subject and must be declared through lab subjects, not as an other office."
+                )
+
+            # 3. each with an active officer
+            active_officer = session.execute(
+                select(User.id).where(
+                    User.role == UserRole.dept_officer,
+                    User.department_id == d.id,
+                    User.is_active == True,
+                )
+            ).first()
+            if not active_officer:
+                raise WorkflowConflictError(
+                    f"Department '{d.name}' has no active dealing officer. Cannot submit clearance request."
+                )
+
+            other_depts.append(d)
+
+    applicable_depts = get_applicable_departments(
+        session,
+        roster,
+        declared_is_hosteller=declared_is_hosteller,
+        declared_lab_courses=declared_courses,
+        other_departments=other_depts,
+    )
+
+    # Validate that every applicable department has at least one active officer
+    for dept in applicable_depts:
+        active_officer = session.execute(
+            select(User.id).where(
+                User.role == UserRole.dept_officer,
+                User.department_id == dept.id,
+                User.is_active == True,
+            )
+        ).first()
+        if not active_officer:
+            raise WorkflowConflictError(
+                f"Department '{dept.name}' has no active dealing officer. Cannot submit clearance request."
+            )
+
     now = datetime.now(timezone.utc)
+    effective_is_hosteller = declared_is_hosteller if declared_is_hosteller is not None else roster.is_hosteller
 
     request = ClearanceRequest(
         roster_id=roster.id,
         status=ClearanceStatus.SUBMITTED,
+        declared_is_hosteller=effective_is_hosteller,
+        others_note=others_note.strip() if others_note else None,
         submitted_at=now,
         created_at=now,
         updated_at=now,
     )
+    request.declared_lab_courses.extend(declared_courses)
     session.add(request)
     session.flush()
 
@@ -192,7 +322,7 @@ def create_request(session: Session, student_user: User) -> ClearanceRequest:
         )
         session.add(approval)
 
-    # Create refund record
+    # Create refund record (provisional deposit; verified by registrar from university records)
     deposit = roster.security_deposit_amount or 0
     refund = Refund(
         request_id=request.id,
@@ -213,9 +343,14 @@ def create_request(session: Session, student_user: User) -> ClearanceRequest:
         details={
             "initial_status": request.status.value,
             "department_count": len(applicable_depts),
-            "deposit_amount": str(deposit),
+            "declared_is_hosteller": declared_is_hosteller,
+            "declared_subjects_count": len(declared_courses),
+            "others_note": request.others_note,
         },
     )
+
+    session.flush()
+    notify_officers_new_request(session, request)
 
     try:
         session.commit()
@@ -313,6 +448,11 @@ def decide_approval(
             "new_request_status": req.status.value,
         },
     )
+
+    if decision == ApprovalStatus.REJECTED:
+        notify_student_rejection(session, req, approval.department.name, approval.remarks or "")
+    elif req.status == ClearanceStatus.HOD_REVIEW and old_request_status != ClearanceStatus.HOD_REVIEW.value:
+        notify_hod_all_approved(session, req)
 
     session.commit()
     session.refresh(approval)
@@ -469,6 +609,7 @@ def hod_decide(
                 "certificate_code": cert.certificate_code,
             },
         )
+        notify_hod_approved(session, req)
     elif decision == ApprovalStatus.REJECTED:
         if not cleaned_remarks:
             raise WorkflowBadRequestError("Remarks are mandatory when rejecting a clearance request.")
@@ -490,6 +631,7 @@ def hod_decide(
                 "hod_remarks": cleaned_remarks,
             },
         )
+        notify_student_hod_rejected(session, req, cleaned_remarks)
     else:
         raise WorkflowBadRequestError("Decision must be APPROVED or REJECTED.")
 
@@ -550,3 +692,436 @@ def student_resubmit_to_hod(
     session.commit()
     session.refresh(req)
     return req
+
+
+def add_department_to_request(
+    session: Session,
+    request_id: int,
+    department_id: int,
+    acting_user: User,
+) -> DepartmentApproval:
+    """
+    Adds an ASSIGNED_ONLY or applicable department to an active clearance request.
+    Verifies:
+    1. Request exists and belongs to the student (or acting user has permission).
+    2. Request is active (not CLEARED or REFUND_VERIFIED).
+    3. Target department exists.
+    4. Target department is not already in the clearance request (409 Conflict).
+    5. Target department has at least one active dealing officer (409 Conflict).
+    Creates:
+    - DepartmentApproval (PENDING)
+    - RosterAssignedDepartment if not present
+    Recomputes request status and records audit log.
+    """
+    req = session.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not req:
+        raise WorkflowNotFoundError(f"Clearance request {request_id} not found.")
+
+    # If student, verify request ownership
+    if acting_user.role == UserRole.student and req.roster_id != acting_user.roster_id:
+        raise WorkflowNotFoundError("Clearance request not found.")
+
+    if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED):
+        raise WorkflowConflictError("Cannot add department to a finalized clearance request.")
+
+    dept = session.get(Department, department_id)
+    if not dept:
+        raise WorkflowNotFoundError(f"Department {department_id} not found.")
+
+    # Check if department is already part of the request
+    existing_approval = session.execute(
+        select(DepartmentApproval).where(
+            DepartmentApproval.request_id == req.id,
+            DepartmentApproval.department_id == dept.id,
+        )
+    ).scalar_one_or_none()
+    if existing_approval:
+        raise WorkflowConflictError(f"Department '{dept.name}' is already part of this clearance request.")
+
+    # Active officer check
+    active_officer = session.execute(
+        select(User.id).where(
+            User.role == UserRole.dept_officer,
+            User.department_id == dept.id,
+            User.is_active == True,
+        )
+    ).first()
+    if not active_officer:
+        raise WorkflowConflictError(
+            f"Department '{dept.name}' has no active dealing officer. Cannot add to clearance request."
+        )
+
+    now = datetime.now(timezone.utc)
+    approval = DepartmentApproval(
+        request_id=req.id,
+        department_id=dept.id,
+        status=ApprovalStatus.PENDING,
+        resubmission_count=0,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(approval)
+
+    # Ensure mapped in roster_assigned_departments
+    assigned_exists = session.execute(
+        select(RosterAssignedDepartment).where(
+            RosterAssignedDepartment.roster_id == req.roster_id,
+            RosterAssignedDepartment.department_id == dept.id,
+        )
+    ).scalar_one_or_none()
+    if not assigned_exists:
+        session.add(
+            RosterAssignedDepartment(
+                roster_id=req.roster_id,
+                department_id=dept.id,
+            )
+        )
+
+    session.flush()
+    session.refresh(req)
+    req.status = recompute_request_status(req)
+
+    _record_audit(
+        session=session,
+        user_id=acting_user.id,
+        action="DEPARTMENT_ADDED_TO_REQUEST",
+        entity_type="DepartmentApproval",
+        entity_id=approval.id,
+        details={
+            "request_id": req.id,
+            "department_id": dept.id,
+            "department_name": dept.name,
+            "new_status": req.status.value,
+        },
+    )
+
+    notify_department_added(session, req, dept, "Added by academic officer")
+
+    session.commit()
+    session.refresh(approval)
+    return approval
+
+
+def add_office_to_request(
+    session: Session,
+    request_id: int,
+    department_id: int,
+    acting_user: User,
+    reason: str,
+) -> DepartmentApproval:
+    """
+    Academic department officer or HoD adds an office to a clearance request.
+    Validations:
+    - reason must be non-empty (400 WorkflowBadRequestError)
+    - request must exist and student must belong to acting_user's academic department (404 WorkflowNotFoundError)
+    - request status must NOT be CLEARED or REFUND_VERIFIED (409 WorkflowConflictError)
+    - target department must exist (404 WorkflowNotFoundError)
+    - department must NOT already be part of the request approvals (409 WorkflowConflictError)
+    - target department must have at least one active officer (409 WorkflowConflictError)
+    Records:
+    - DepartmentApproval with added_by_user_id and added_reason
+    - Audit log
+    - Recomputes request status (e.g. HOD_REVIEW -> SUBMITTED)
+    """
+    clean_reason = reason.strip() if reason else ""
+    if not clean_reason:
+        raise WorkflowBadRequestError("Reason is mandatory when adding an office to a clearance request.")
+
+    req = session.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not req:
+        raise WorkflowNotFoundError(f"Clearance request {request_id} not found.")
+
+    # Scoped strictly to acting user's academic department
+    student_acad_dept_id = (
+        req.roster_entry.programme.academic_department_id
+        if (req.roster_entry and req.roster_entry.programme)
+        else None
+    )
+    if student_acad_dept_id != acting_user.department_id:
+        raise WorkflowNotFoundError("Clearance request not found in your academic department.")
+
+    if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED):
+        raise WorkflowConflictError("Cannot add department to a finalized clearance request.")
+
+    dept = session.get(Department, department_id)
+    if not dept:
+        raise WorkflowNotFoundError(f"Department {department_id} not found.")
+
+    # Check duplicate
+    existing_approval = session.execute(
+        select(DepartmentApproval).where(
+            DepartmentApproval.request_id == req.id,
+            DepartmentApproval.department_id == dept.id,
+        )
+    ).scalar_one_or_none()
+    if existing_approval:
+        raise WorkflowConflictError(f"Department '{dept.name}' is already part of this clearance request.")
+
+    # Active officer check
+    active_officer = session.execute(
+        select(User.id).where(
+            User.role == UserRole.dept_officer,
+            User.department_id == dept.id,
+            User.is_active == True,
+        )
+    ).first()
+    if not active_officer:
+        raise WorkflowConflictError(
+            f"Department '{dept.name}' has no active dealing officer. Cannot add to clearance request."
+        )
+
+    now = datetime.now(timezone.utc)
+    approval = DepartmentApproval(
+        request_id=req.id,
+        department_id=dept.id,
+        status=ApprovalStatus.PENDING,
+        added_by_user_id=acting_user.id,
+        added_reason=clean_reason,
+        resubmission_count=0,
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(approval)
+
+    session.flush()
+    session.refresh(req)
+    req.status = recompute_request_status(req)
+
+    _record_audit(
+        session=session,
+        user_id=acting_user.id,
+        action="OFFICE_ADDED_BY_STAFF",
+        entity_type="DepartmentApproval",
+        entity_id=approval.id,
+        details={
+            "request_id": req.id,
+            "department_id": dept.id,
+            "department_name": dept.name,
+            "reason": clean_reason,
+            "new_status": req.status.value,
+        },
+    )
+
+    notify_department_added(session, req, dept, clean_reason)
+
+    session.commit()
+    session.refresh(approval)
+    return approval
+
+
+def student_declare_lab_courses(
+    session: Session,
+    student_user: User,
+    request_id: int,
+    lab_course_ids: list[int],
+) -> ClearanceRequest:
+    """
+    Student declares more lab subjects while the request is not CLEARED/REFUND_VERIFIED.
+    Adds new subjects to declared_lab_courses; for any new lab department, adds a PENDING approval.
+    Recomputes request status (HOD_REVIEW drops back to SUBMITTED).
+    """
+    req = session.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not req or req.roster_id != student_user.roster_id:
+        raise WorkflowNotFoundError("Clearance request not found.")
+
+    if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED):
+        raise WorkflowConflictError("Cannot declare subjects for a finalized clearance request.")
+
+    if not lab_course_ids:
+        return req
+
+    courses = session.execute(
+        select(LabCourse).where(LabCourse.id.in_(lab_course_ids), LabCourse.is_active == True)
+    ).scalars().all()
+
+    existing_course_ids = {c.id for c in req.declared_lab_courses}
+    existing_dept_ids = {a.department_id for a in req.approvals}
+    new_depts_added = []
+    now = datetime.now(timezone.utc)
+
+    for c in courses:
+        if c.id not in existing_course_ids:
+            req.declared_lab_courses.append(c)
+            existing_course_ids.add(c.id)
+
+        if c.lab_department_id not in existing_dept_ids:
+            lab_dept = session.get(Department, c.lab_department_id)
+            active_officer = session.execute(
+                select(User.id).where(
+                    User.role == UserRole.dept_officer,
+                    User.department_id == c.lab_department_id,
+                    User.is_active == True,
+                )
+            ).first()
+            if not active_officer:
+                dept_name = lab_dept.name if lab_dept else f"#{c.lab_department_id}"
+                raise WorkflowConflictError(
+                    f"Department '{dept_name}' has no active dealing officer. Cannot add to clearance request."
+                )
+
+            approval = DepartmentApproval(
+                request_id=req.id,
+                department_id=c.lab_department_id,
+                status=ApprovalStatus.PENDING,
+                resubmission_count=0,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(approval)
+            existing_dept_ids.add(c.lab_department_id)
+            new_depts_added.append(c.lab_department_id)
+
+    session.flush()
+    session.refresh(req)
+    req.status = recompute_request_status(req)
+
+    _record_audit(
+        session=session,
+        user_id=student_user.id,
+        action="STUDENT_DECLARED_LAB_COURSES",
+        entity_type="ClearanceRequest",
+        entity_id=req.id,
+        details={
+            "declared_lab_course_ids": lab_course_ids,
+            "new_departments_added": new_depts_added,
+            "new_status": req.status.value,
+        },
+    )
+
+    session.commit()
+    session.refresh(req)
+    return req
+
+
+def student_cancel_request(
+    session: Session,
+    request_id: int,
+    student_user: User,
+    reason: str | None = None,
+) -> ClearanceRequest:
+    """
+    Student cancels their clearance request.
+    Permitted ONLY when all departmental approvals are still in PENDING status.
+    Forbidden if any approval was approved/rejected or request reached HOD_REVIEW / CLEARED.
+    """
+    req = session.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not req:
+        raise WorkflowNotFoundError(f"Clearance request {request_id} not found.")
+
+    if req.roster_id != student_user.roster_id:
+        raise WorkflowForbiddenError("You can only cancel your own clearance request.")
+
+    if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED, ClearanceStatus.CANCELLED):
+        raise WorkflowBadRequestError("Cannot cancel a completed, verified, or already cancelled request.")
+
+    # Check that all approvals are still PENDING
+    any_non_pending = any(a.status != ApprovalStatus.PENDING for a in req.approvals)
+    if any_non_pending or req.status != ClearanceStatus.SUBMITTED:
+        raise WorkflowBadRequestError("Student can cancel only when all approvals are still PENDING.")
+
+    req.status = ClearanceStatus.CANCELLED
+    now = datetime.now(timezone.utc)
+    req.updated_at = now
+
+    cancel_reason = reason.strip() if reason else "Cancelled by student"
+    _record_audit(
+        session=session,
+        user_id=student_user.id,
+        action="CANCELLED_BY_STUDENT",
+        entity_type="ClearanceRequest",
+        entity_id=req.id,
+        details={"reason": cancel_reason},
+    )
+
+    notify_request_cancelled(session, req, cancel_reason)
+
+    session.commit()
+    session.refresh(req)
+    return req
+
+
+def staff_cancel_request(
+    session: Session,
+    request_id: int,
+    staff_user: User,
+    reason: str,
+) -> ClearanceRequest:
+    """
+    Department officer or administrator cancels a clearance request.
+    Rules:
+    - Reason is mandatory (WorkflowBadRequestError)
+    - Forbidden if status is CLEARED, REFUND_VERIFIED, or CANCELLED (WorkflowBadRequestError)
+    - If acting user is dept_officer:
+      Must belong to academic department matching student's enrolled programme (WorkflowForbiddenError)
+    - If acting user is admin: allowed
+    - Records audit entry and queues notification email to student.
+    """
+    clean_reason = reason.strip() if reason else ""
+    if not clean_reason:
+        raise WorkflowBadRequestError("Cancellation reason is mandatory.")
+
+    req = session.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == request_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if not req:
+        raise WorkflowNotFoundError(f"Clearance request {request_id} not found.")
+
+    if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED, ClearanceStatus.CANCELLED):
+        raise WorkflowBadRequestError("Cannot cancel a cleared, verified, or already cancelled request.")
+
+    # Check role permissions
+    if staff_user.role == UserRole.dept_officer:
+        # Academic officer can cancel only own students
+        student_acad_id = (
+            req.roster_entry.programme.academic_department_id
+            if (req.roster_entry and req.roster_entry.programme)
+            else None
+        )
+        officer_dept = staff_user.department
+        if not officer_dept or officer_dept.kind != DepartmentKind.academic or staff_user.department_id != student_acad_id:
+            raise WorkflowForbiddenError("Academic officers can only cancel clearance requests of their own students.")
+    elif staff_user.role != UserRole.admin:
+        raise WorkflowForbiddenError("Only academic department officers or administrators can cancel clearance requests.")
+
+    req.status = ClearanceStatus.CANCELLED
+    now = datetime.now(timezone.utc)
+    req.updated_at = now
+
+    _record_audit(
+        session=session,
+        user_id=staff_user.id,
+        action="CANCELLED_BY_STAFF",
+        entity_type="ClearanceRequest",
+        entity_id=req.id,
+        details={"reason": clean_reason, "cancelled_by_role": staff_user.role.value},
+    )
+
+    notify_request_cancelled(session, req, clean_reason)
+
+    session.commit()
+    session.refresh(req)
+    return req
+

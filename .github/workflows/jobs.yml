@@ -1,0 +1,47 @@
+name: SVSU No-Dues Scheduled Background Jobs
+
+on:
+  # Manual dispatch is active by default.
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Job to execute'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - send-emails
+          - send-reminders
+
+  # SCHEDULE (Commented out by default):
+  # NOTE ON HOSTING RESOURCE IMPACT:
+  # On Render free tier and Neon serverless Postgres, every HTTP invocation wakes the web service
+  # and resumes the database compute from suspension. Do NOT run this cron every minute!
+  # If enabling automated cron execution, keep the schedule gentle (e.g. every 15 or 30 minutes
+  # during university working hours only, Monday through Friday, 03:30 to 11:30 UTC / 9:00 AM to 5:00 PM IST).
+  #
+  # schedule:
+  #   - cron: "*/15 3-11 * * 1-5"
+
+jobs:
+  run-scheduled-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Outbox Emails
+        if: "${{ github.event_name == 'schedule' || inputs.job == 'all' || inputs.job == 'send-emails' }}"
+        run: |
+          echo "Triggering /internal/jobs/send-emails..."
+          curl -s -S -X POST "${{ secrets.BACKEND_URL }}/internal/jobs/send-emails" \
+            -H "X-Job-Key: ${{ secrets.JOB_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --fail-with-body
+
+      - name: Send Daily Clearance Reminders
+        if: "${{ github.event_name == 'schedule' || inputs.job == 'all' || inputs.job == 'send-reminders' }}"
+        run: |
+          echo "Triggering /internal/jobs/send-reminders..."
+          curl -s -S -X POST "${{ secrets.BACKEND_URL }}/internal/jobs/send-reminders" \
+            -H "X-Job-Key: ${{ secrets.JOB_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --fail-with-body

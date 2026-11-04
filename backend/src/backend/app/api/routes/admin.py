@@ -7,7 +7,7 @@ import secrets
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select, func, or_, delete
 from sqlalchemy.orm import joinedload
 
@@ -16,7 +16,8 @@ from backend.app.core.config import settings
 from backend.app.core.security import hash_password, normalize_email
 from backend.app.models.user import User, UserRole
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
-from backend.app.models.university import Department, Programme, DepartmentKind
+from backend.app.models.university import Department, Programme, DepartmentKind, DepartmentApplicability
+from backend.app.models.lab_course import LabCourse
 from backend.app.models.audit import AuditLog
 from backend.app.schemas.common import ErrorResponse
 from backend.app.schemas.admin import (
@@ -31,6 +32,27 @@ from backend.app.schemas.admin import (
     AdminResetPasswordResponse,
     AdminUserActiveRequest,
     AdminUserListItem,
+    AdminOfficeUserSummary,
+    AdminOfficeSummary,
+    AdminOfficeListResponse,
+    AdminUserBulkUploadDetail,
+    AdminUserBulkUploadResponse,
+)
+from backend.app.schemas.department import (
+    LabCourseListResponse,
+    LabCourseItem,
+    LabCourseCreate,
+    LabCoursePatch,
+    LabCourseUploadResponse,
+    LabCourseUploadRowReport,
+)
+
+from backend.app.schemas.workflow import StaffCancelRequest, CancelResponse
+from backend.app.services.workflow import staff_cancel_request
+from backend.app.services.exceptions import (
+    WorkflowBadRequestError,
+    WorkflowNotFoundError,
+    WorkflowForbiddenError,
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -244,6 +266,7 @@ async def upload_roster_csv(
             existing.programme_id = prog_id
             existing.is_hosteller = is_hosteller
             existing.security_deposit_amount = deposit_amt
+            existing.updated_by_user_id = current_user.id
             row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="updated"))
             updated_count += 1
         else:
@@ -274,6 +297,9 @@ async def upload_roster_csv(
                 programme_id=prog_id,
                 is_hosteller=is_hosteller,
                 security_deposit_amount=deposit_amt,
+                source="admin",
+                created_by_user_id=current_user.id,
+                updated_by_user_id=current_user.id,
             )
             db.add(new_roster)
             row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="created"))
@@ -474,6 +500,8 @@ def update_roster_entry(
             changes["email"] = new_email
             roster.email = new_email
 
+    roster.updated_by_user_id = current_user.id
+
     _record_admin_audit(
         db,
         current_user.id,
@@ -620,9 +648,16 @@ def create_staff_user(
         if not dept:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department ID {body.department_id} not found")
 
-    # Generate one-time temporary password (never log this!)
-    temp_password = secrets.token_urlsafe(12)
-    pw_hash = hash_password(temp_password)
+    # Handle Google-only accounts vs password accounts
+    if body.google_only:
+        temp_password = None
+        pw_hash = None
+        must_change_pw = False
+    else:
+        temp_password = secrets.token_urlsafe(12)
+        pw_hash = hash_password(temp_password)
+        must_change_pw = True
+
     now = datetime.now(timezone.utc)
 
     user = User(
@@ -633,6 +668,7 @@ def create_staff_user(
         department_id=body.department_id,
         roster_id=None,
         is_active=True,
+        must_change_password=must_change_pw,
         created_at=now,
     )
     db.add(user)
@@ -686,8 +722,15 @@ def reset_user_password(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    if user.password_hash is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Password cannot be reset for Google-authenticated accounts without password login.",
+        )
+
     temp_password = secrets.token_urlsafe(12)
     user.password_hash = hash_password(temp_password)
+    user.must_change_password = True
 
     _record_admin_audit(
         db,
@@ -783,6 +826,8 @@ def list_admin_users(
     current_user: User = Depends(require_admin),
     search: str | None = Query(None, description="Search by email or full name"),
     role: UserRole | None = Query(None, description="Filter by user role"),
+    department_id: int | None = Query(None, description="Filter by department ID"),
+    is_active: bool | None = Query(None, description="Filter by active status"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> list[AdminUserListItem]:
@@ -794,6 +839,12 @@ def list_admin_users(
 
     if role:
         stmt = stmt.where(User.role == role)
+
+    if department_id is not None:
+        stmt = stmt.where(User.department_id == department_id)
+
+    if is_active is not None:
+        stmt = stmt.where(User.is_active == is_active)
 
     if search and search.strip():
         term = f"%{search.strip().lower()}%"
@@ -821,3 +872,468 @@ def list_admin_users(
         )
         for u in users
     ]
+
+
+@router.get(
+    "/offices",
+    response_model=AdminOfficeListResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="list_admin_offices",
+    summary="List University Offices and Staffing Status",
+    description="Returns all university departments with their active officers, HoD (if academic), and missing staff flags.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def list_admin_offices(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AdminOfficeListResponse:
+    depts = db.execute(
+        select(Department)
+        .options(joinedload(Department.users))
+        .order_by(Department.id.asc())
+    ).unique().scalars().all()
+
+    office_items: list[AdminOfficeSummary] = []
+    for d in depts:
+        active_officers = [
+            AdminOfficeUserSummary(id=u.id, name=u.full_name, email=u.email)
+            for u in d.users
+            if u.role == UserRole.dept_officer and u.is_active
+        ]
+        hod_user = next(
+            (AdminOfficeUserSummary(id=u.id, name=u.full_name, email=u.email)
+             for u in d.users
+             if u.role == UserRole.hod and u.is_active),
+            None,
+        )
+        missing_officer = (len(active_officers) == 0)
+        missing_hod = (d.kind == DepartmentKind.academic and hod_user is None)
+
+        office_items.append(
+            AdminOfficeSummary(
+                id=d.id,
+                name=d.name,
+                kind=d.kind.value,
+                applicability=d.applicability.value,
+                description=d.description,
+                active_officers=active_officers,
+                hod=hod_user,
+                missing_officer=missing_officer,
+                missing_hod=missing_hod,
+            )
+        )
+
+    return AdminOfficeListResponse(
+        total=len(office_items),
+        items=office_items,
+    )
+
+
+@router.post(
+    "/users/bulk-upload",
+    response_model=AdminUserBulkUploadResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="bulk_upload_admin_users",
+    summary="Bulk Provision University Staff Users",
+    description="Uploads a CSV of university staff accounts (dept_officer, hod, registrar_accounts). Returns one-time temporary passwords ONLY in this response.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid CSV structure or missing headers"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+async def bulk_upload_admin_users(
+    db: SessionDep,
+    file: UploadFile = File(..., description="CSV file with staff accounts"),
+    google_only: bool = Query(False, description="When true, created accounts have no password and authenticate via Google"),
+    current_user: User = Depends(require_admin),
+) -> AdminUserBulkUploadResponse:
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to decode CSV file as text")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file is empty or missing headers")
+
+    fieldnames_map = {f.strip().lower(): f for f in reader.fieldnames if f}
+    required_cols = ["email", "full_name", "role", "department"]
+    for col in required_cols:
+        if col not in fieldnames_map:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required CSV column '{col}'. Required: {', '.join(required_cols)}",
+            )
+
+    all_depts = db.execute(select(Department)).scalars().all()
+    dept_by_name = {d.name.strip().lower(): d for d in all_depts}
+    dept_by_id = {d.id: d for d in all_depts}
+
+    row_reports: list[AdminUserBulkUploadDetail] = []
+    created_count = 0
+    rejected_count = 0
+
+    for idx, row in enumerate(reader, start=1):
+        raw_email = row.get(fieldnames_map["email"])
+        email = normalize_email(raw_email) if raw_email else ""
+        full_name = (row.get(fieldnames_map["full_name"]) or "").strip()
+        role_str = (row.get(fieldnames_map["role"]) or "").strip().lower()
+        dept_str = (row.get(fieldnames_map["department"]) or "").strip()
+
+        if not email or not full_name:
+            row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email or "UNKNOWN", status="rejected", reason="Email and full_name are mandatory"))
+            rejected_count += 1
+            continue
+
+        if not EMAIL_REGEX.match(email):
+            row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Invalid email format: '{email}'"))
+            rejected_count += 1
+            continue
+
+        domain = email.split("@")[-1] if "@" in email else ""
+        if domain not in settings.allowed_email_domain_list:
+            row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Email domain '@{domain}' is not allowed"))
+            rejected_count += 1
+            continue
+
+        try:
+            role = UserRole(role_str)
+        except ValueError:
+            row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Invalid role: '{role_str}'"))
+            rejected_count += 1
+            continue
+
+        if role not in (UserRole.dept_officer, UserRole.hod, UserRole.registrar_accounts):
+            row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason="Bulk upload only supports staff roles (dept_officer, hod, registrar_accounts)"))
+            rejected_count += 1
+            continue
+
+        matched_dept = None
+        if dept_str:
+            matched_dept = dept_by_name.get(dept_str.lower())
+            if not matched_dept and dept_str.isdigit():
+                matched_dept = dept_by_id.get(int(dept_str))
+
+        if role in (UserRole.dept_officer, UserRole.hod):
+            if not matched_dept:
+                row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Department '{dept_str}' not found (mandatory for {role.value})"))
+                rejected_count += 1
+                continue
+            if role == UserRole.hod and matched_dept.kind != DepartmentKind.academic:
+                row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason="HoD must belong to an academic department"))
+                rejected_count += 1
+                continue
+
+        # Check existing user
+        exists_user = db.execute(select(User).where(func.lower(User.email) == email)).scalars().first()
+        if exists_user:
+            row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"User with email '{email}' already exists"))
+            rejected_count += 1
+            continue
+
+        # Check per-row or query-param google_only flag
+        row_google_only = google_only
+        if "google_only" in fieldnames_map:
+            raw_go = (row.get(fieldnames_map["google_only"]) or "").strip().lower()
+            if raw_go in ("true", "1", "yes"):
+                row_google_only = True
+            elif raw_go in ("false", "0", "no"):
+                row_google_only = False
+
+        if row_google_only:
+            temp_password = None
+            hashed_pw = None
+            must_change = False
+        else:
+            temp_password = secrets.token_urlsafe(12)
+            hashed_pw = hash_password(temp_password)
+            must_change = True
+
+        new_user = User(
+            email=email,
+            full_name=full_name,
+            password_hash=hashed_pw,
+            role=role,
+            department_id=matched_dept.id if matched_dept else None,
+            is_active=True,
+            must_change_password=must_change,
+        )
+        db.add(new_user)
+        db.flush()
+
+        # Audit log does NOT store temporary password
+        _record_admin_audit(
+            db,
+            current_user.id,
+            action="CREATE_USER_BULK",
+            entity_type="users",
+            entity_id=new_user.id,
+            details={"email": new_user.email, "role": new_user.role.value, "department_id": new_user.department_id},
+        )
+
+        row_reports.append(
+            AdminUserBulkUploadDetail(
+                row_number=idx,
+                email=email,
+                status="created",
+                temporary_password=temp_password,
+            )
+        )
+        created_count += 1
+
+    db.commit()
+
+    return AdminUserBulkUploadResponse(
+        total_rows=len(row_reports),
+        created_count=created_count,
+        rejected_count=rejected_count,
+        rows=row_reports,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ADMIN LAB COURSES (Fallback endpoints)
+# ---------------------------------------------------------------------------
+
+
+def _format_admin_lab_item(c: LabCourse) -> LabCourseItem:
+    return LabCourseItem(
+        id=c.id,
+        code=c.code,
+        name=c.name,
+        academic_department_id=c.academic_department_id,
+        academic_department_name=c.academic_department.name if c.academic_department else None,
+        lab_department_id=c.lab_department_id,
+        lab_department_name=c.lab_department.name if c.lab_department else None,
+        specialization=c.specialization,
+        is_active=c.is_active,
+        created_at=c.created_at,
+        updated_at=c.updated_at,
+    )
+
+
+@router.get(
+    "/lab-courses/template.csv",
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_get_lab_courses_template_csv",
+    summary="Download Lab Courses CSV Template (Admin)",
+    description="Downloads a CSV template formatted for lab course catalog upload.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def admin_get_lab_courses_template(
+    current_user: User = Depends(require_admin),
+) -> Response:
+    csv_content = (
+        "code,name,academic_department,lab_office,specialization\r\n"
+        "CSE-L101,Advanced Programming Lab,Skill Department of CS/IT,Lab-1,Computer Engineering\r\n"
+    )
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="lab_courses_template.csv"'},
+    )
+
+
+@router.get(
+    "/lab-courses",
+    response_model=LabCourseListResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_list_lab_courses",
+    summary="List University Lab Courses (Admin)",
+    description="Returns all lab courses across all academic departments with optional department and active filters.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def admin_list_lab_courses(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+    academic_department_id: int | None = Query(None, description="Filter by academic department ID"),
+    is_active: bool | None = Query(None, description="Filter by active status"),
+    limit: int = Query(50, ge=1, le=100, description="Page limit"),
+    offset: int = Query(0, ge=0, description="Page offset"),
+) -> LabCourseListResponse:
+    query = (
+        select(LabCourse)
+        .options(joinedload(LabCourse.academic_department), joinedload(LabCourse.lab_department))
+    )
+    if academic_department_id is not None:
+        query = query.where(LabCourse.academic_department_id == academic_department_id)
+    if is_active is not None:
+        query = query.where(LabCourse.is_active == is_active)
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total = db.execute(count_query).scalar() or 0
+
+    courses = db.execute(
+        query.order_by(LabCourse.code.asc()).offset(offset).limit(limit)
+    ).unique().scalars().all()
+
+    return LabCourseListResponse(
+        total=total,
+        items=[_format_admin_lab_item(c) for c in courses],
+    )
+
+
+@router.post(
+    "/lab-courses",
+    response_model=LabCourseItem,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="admin_create_lab_course",
+    summary="Create Lab Course (Admin)",
+    description="Creates a new lab course mapped to an academic department and an ASSIGNED_ONLY service department.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid department or not ASSIGNED_ONLY"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        409: {"model": ErrorResponse, "description": "Lab course code already exists"},
+    },
+)
+def admin_create_lab_course(
+    body: LabCourseCreate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> LabCourseItem:
+    if not body.academic_department_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="academic_department_id is required.",
+        )
+    acad_dept = db.get(Department, body.academic_department_id)
+    if not acad_dept or acad_dept.kind != DepartmentKind.academic:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="academic_department_id must be a valid academic department.",
+        )
+
+    code_clean = body.code.strip().upper()
+    exists = db.execute(
+        select(LabCourse).where(func.upper(LabCourse.code) == code_clean)
+    ).scalars().first()
+    if exists:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Lab course code '{code_clean}' already exists.",
+        )
+
+    lab_dept = db.get(Department, body.lab_department_id)
+    if not lab_dept or lab_dept.applicability != DepartmentApplicability.ASSIGNED_ONLY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Assigned lab office must be a service department with ASSIGNED_ONLY applicability.",
+        )
+
+    course = LabCourse(
+        code=code_clean,
+        name=body.name.strip(),
+        academic_department_id=acad_dept.id,
+        lab_department_id=lab_dept.id,
+        specialization=body.specialization.strip() if body.specialization else None,
+        is_active=True,
+    )
+    db.add(course)
+    db.flush()
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_LAB_COURSE_CREATED",
+        entity_type="LabCourse",
+        entity_id=course.id,
+        details={"code": course.code, "name": course.name},
+    )
+    db.commit()
+    db.refresh(course)
+
+    return _format_admin_lab_item(course)
+
+
+@router.patch(
+    "/lab-courses/{id}",
+    response_model=LabCourseItem,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_patch_lab_course",
+    summary="Update Lab Course (Admin)",
+    description="Updates a lab course's name, specialization, or active status.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Lab course not found"},
+    },
+)
+def admin_patch_lab_course(
+    id: int,
+    body: LabCoursePatch,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> LabCourseItem:
+    course = db.execute(
+        select(LabCourse)
+        .where(LabCourse.id == id)
+        .options(joinedload(LabCourse.academic_department), joinedload(LabCourse.lab_department))
+    ).scalars().first()
+
+    if not course:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab course not found.")
+
+    if body.name is not None:
+        course.name = body.name.strip()
+    if body.specialization is not None:
+        course.specialization = body.specialization.strip() if body.specialization else None
+    if body.is_active is not None:
+        course.is_active = body.is_active
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_LAB_COURSE_UPDATED",
+        entity_type="LabCourse",
+        entity_id=course.id,
+        details={"code": course.code, "is_active": course.is_active},
+    )
+    db.commit()
+    db.refresh(course)
+
+    return _format_admin_lab_item(course)
+
+
+@router.post(
+    "/requests/{id}/cancel",
+    response_model=CancelResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_cancel_clearance_request",
+    summary="Admin Cancel Clearance Request",
+    description="Allows administrators to cancel an active clearance request with mandatory reason.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid state (already cleared/verified) or missing reason"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Clearance request not found"},
+    },
+)
+def admin_cancel_request(
+    id: int,
+    body: StaffCancelRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> CancelResponse:
+    try:
+        req = staff_cancel_request(db, id, current_user, body.reason)
+        return CancelResponse(
+            detail="Clearance request successfully cancelled.",
+            request_id=req.id,
+            status=req.status,
+        )
+    except WorkflowNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=e.message)
+    except WorkflowBadRequestError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
+    except WorkflowForbiddenError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=e.message)
+
+

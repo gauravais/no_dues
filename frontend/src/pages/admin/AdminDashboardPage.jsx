@@ -352,18 +352,18 @@ export function AdminDashboardPage() {
     toast.success('Password copied to clipboard.')
   }
 
-  const handleDownloadSampleCsv = () => {
+  const handleDownloadTemplateCsv = () => {
     const csvContent =
       'registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\n' +
-      'SAMPLE001,Sample Student A,student.sample1@svsu.ac.in,9876543210,"H.No 12, Sector 14, Gurugram",B.Tech Robotics and Automation,true,5000\n' +
-      'SAMPLE002,Sample Student B,student.sample2@svsu.ac.in,9876543211,"Flat 402, Green Valley, Palwal",B.Tech Industry 4.0,false,3000\n' +
-      'SAMPLE003,Sample Student C,student.sample3@svsu.ac.in,9876543212,"Vill. Dudhola, Palwal, Haryana",B.Voc Automotive Studies,true,5000\n'
+      'STU2024001,Student One,student1@svsu.ac.in,9876543210,"H.No 12, Sector 14, Gurugram",B.Tech Robotics and Automation,true,5000\n' +
+      'STU2024002,Student Two,student2@svsu.ac.in,9876543211,"Flat 402, Green Valley, Palwal",B.Tech Industry 4.0,false,3000\n' +
+      'STU2024003,Student Three,student3@svsu.ac.in,9876543212,"Vill. Dudhola, Palwal, Haryana",B.Voc Automotive Studies,true,5000\n'
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.setAttribute('download', 'svsu_roster_sample.csv')
+    link.setAttribute('download', 'svsu_roster_template.csv')
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
@@ -736,11 +736,11 @@ export function AdminDashboardPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={handleDownloadSampleCsv}
+                        onClick={handleDownloadTemplateCsv}
                         className="text-xs gap-1.5 h-9 text-zinc-700"
                       >
                         <Download className="w-3.5 h-3.5" />
-                        Download Sample CSV Template
+                        Download CSV Template
                       </Button>
 
                       <Button

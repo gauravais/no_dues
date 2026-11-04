@@ -21,3 +21,8 @@ class WorkflowConflictError(WorkflowError):
 class WorkflowBadRequestError(WorkflowError):
     """Validation or missing required parameter error (maps to 400)."""
     pass
+
+
+class WorkflowForbiddenError(WorkflowError):
+    """Forbidden action or permission denied (maps to 403)."""
+    pass

@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { registrarApi } from '@/api/registrar'
 import { useAuth } from '@/auth/AuthContext'
@@ -134,6 +135,7 @@ export function RegistrarRefundPage() {
 
     try {
       const res = await registrarApi.verifyRefund(selectedRequest.request_id, {
+        deposit_amount: deposit,
         deductions: numDeductions,
         remarks: remarks.trim() || null,
       })
@@ -299,27 +301,37 @@ export function RegistrarRefundPage() {
         header: 'Action',
         cell: ({ row }) => {
           const item = row.original
-          if (activeTab === 'REFUND_VERIFIED') {
-            return (
-              <Button
-                size="sm"
-                onClick={() => openRefundModal(item, 2)}
-                className="h-8 px-3 text-xs gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
-              >
-                <FileCheck2 className="w-3.5 h-3.5" />
-                Record UTR
-              </Button>
-            )
-          }
           return (
-            <Button
-              size="sm"
-              onClick={() => openRefundModal(item, 1)}
-              className="h-8 px-3 text-xs gap-1.5 bg-zinc-950 text-white hover:bg-zinc-800"
-            >
-              <CreditCard className="w-3.5 h-3.5" />
-              Reconcile Refund
-            </Button>
+            <div className="flex items-center gap-1.5">
+              {activeTab === 'REFUND_VERIFIED' ? (
+                <Button
+                  size="sm"
+                  onClick={() => openRefundModal(item, 2)}
+                  className="h-8 px-2.5 text-xs gap-1 bg-emerald-700 text-white hover:bg-emerald-800"
+                >
+                  <FileCheck2 className="w-3.5 h-3.5" />
+                  Record UTR
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  onClick={() => openRefundModal(item, 1)}
+                  className="h-8 px-2.5 text-xs gap-1 bg-zinc-950 text-white hover:bg-zinc-800"
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  Reconcile
+                </Button>
+              )}
+              <Link to={`/registrar/requests/${item.request_id}`}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 px-2.5 text-xs border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                >
+                  Inspect
+                </Button>
+              </Link>
+            </div>
           )
         },
       }

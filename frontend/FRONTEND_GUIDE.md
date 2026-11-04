@@ -61,39 +61,21 @@ frontend/
 │   ├── api/                      # Strongly typed REST client modules
 │   │   ├── auth.js               # Login, Me, OTP request & verify
 │   │   ├── student.js            # Bank details, Request lifecycle, Resubmits, PDF blob
-│   │   ├── department.js         # Department Queue & Decision submission
-│   │   ├── hod.js                # HoD Queue, Request Detail, Decision submission
-│   │   ├── registrar.js          # Cleared Queue, Verify Refund, Mark Processed
+│   │   ├── department.js         # Queue, Decision, Roster, Lab Catalog, Dossier, Add Office
+│   │   ├── hod.js                # HoD Queue, Request Detail, Decision, Add Office
+│   │   ├── registrar.js          # Queue, Detail, Verify Refund, Mark Processed, Audited Reveal
 │   │   └── verify.js             # Public certificate check by UUID
 │   ├── auth/                     # Authentication & Authorization
 │   │   ├── AuthContext.jsx       # Global JWT, user profile, role helpers
 │   │   └── ProtectedRoute.jsx    # Role-based route guard & redirect logic
 │   ├── components/               # Custom and domain-specific UI components
-│   │   ├── AppShell.jsx          # Responsive shell, wordmark, mobile Sheet
+│   │   ├── AppShell.jsx          # Responsive shell, wordmark, mobile Sheet, academic role nav
 │   │   ├── DataTable.jsx         # TanStack Table + shadcn Table (sort, paginate, mobile cards)
+│   │   ├── CsvUpload.jsx         # Drag-and-drop CSV uploader, size check, template download, report
 │   │   ├── StatusBadge.jsx       # Icon + tint badges for Clearance & Approvals
 │   │   ├── StepTimeline.jsx      # 4-stage visual clearance progress pipeline
 │   │   ├── EmptyState.jsx        # Standard empty state card
 │   │   └── ui/                   # Official shadcn/ui components (Radix primitives)
-│   │       ├── alert-dialog.jsx
-│   │       ├── alert.jsx
-│   │       ├── badge.jsx
-│   │       ├── button.jsx
-│   │       ├── card.jsx
-│   │       ├── dialog.jsx
-│   │       ├── input.jsx
-│   │       ├── label.jsx
-│   │       ├── pagination.jsx
-│   │       ├── progress.jsx
-│   │       ├── select.jsx
-│   │       ├── separator.jsx
-│   │       ├── sheet.jsx
-│   │       ├── skeleton.jsx
-│   │       ├── sonner.jsx
-│   │       ├── table.jsx
-│   │       ├── tabs.jsx
-│   │       ├── textarea.jsx
-│   │       └── tooltip.jsx
 │   ├── lib/
 │   │   ├── axios.js              # Axios instance, Bearer injector, 401/403 interceptors
 │   │   └── utils.js              # cn class-name utility
@@ -106,16 +88,24 @@ frontend/
 │   │   │   ├── NotFoundPage.jsx  # 404 handler
 │   │   │   └── ForbiddenPage.jsx # 403 authorization handler
 │   │   ├── student/
-│   │   │   └── StudentDashboard.jsx # Stat strip, bank details, live checklist, resubmit, PDF
+│   │   │   ├── StudentDashboard.jsx # Stat strip, bank details, live checklist, "Add More" panel, resubmit, PDF
+│   │   │   └── StudentApplyPage.jsx # 5-step accessible clearance declaration wizard
 │   │   ├── officer/
-│   │   │   └── OfficerQueuePage.jsx # Department Officer Queue, status tabs, decision modal
+│   │   │   ├── OfficerQueuePage.jsx         # Department Officer Queue, status tabs, decision modal
+│   │   │   ├── OfficerRosterPage.jsx        # Academic officer student roster list & CSV ingestion
+│   │   │   ├── OfficerLabCatalogPage.jsx    # Academic officer lab subjects catalog & CSV ingestion
+│   │   │   └── OfficerRequestDetailPage.jsx # Academic clearance dossier & add office dialog
 │   │   ├── hod/
-│   │   │   ├── HodQueuePage.jsx     # HoD Queue for academic department
-│   │   │   └── HodRequestDetailPage.jsx # Full Dossier, sign-off matrix, approval/rejection
+│   │   │   ├── HodQueuePage.jsx             # HoD Queue for academic department
+│   │   │   └── HodRequestDetailPage.jsx     # Full Dossier, sign-off matrix, approval/rejection, add office
 │   │   ├── registrar/
-│   │   │   └── RegistrarRefundPage.jsx # Cleared queue, deduction calculator, payment ref
+│   │   │   ├── RegistrarRefundPage.jsx       # Cleared queue, deduction calculator, payment ref
+│   │   │   └── RegistrarRequestDetailPage.jsx # Financial audit, roster provenance, 30s bank reveal
 │   │   └── admin/
-│   │       └── AdminDashboardPage.jsx # Master roster, CSV ingestion, staff provisioning
+│   │       ├── AdminOfficesPage.jsx       # Department staffing dashboard & staffing gaps
+│   │       ├── AdminUsersPage.jsx         # User directory, provisioning, bulk upload, passwords
+│   │       ├── AdminRosterPage.jsx        # Master roster fallback & CSV ingestion
+│   │       └── AdminLabCoursesPage.jsx    # Master lab courses catalog & CSV ingestion
 │   ├── App.jsx                   # React Router, ErrorBoundary & TanStack Query root provider
 │   ├── index.css                 # Minimalist white theme tokens & animations
 │   └── main.jsx                  # Entrypoint with Syne & Inter font imports
@@ -143,120 +133,308 @@ frontend/
 - **Mobile Card View**: Fluid responsive breakpoint (`md`) swapping the table view for an accessible stacked card layout with optional `renderMobileCard` customization.
 - **Status Filter Tabs**: Integrated `Tabs` component for status filtering (`PENDING`, `APPROVED`, `REJECTED`, `ALL`).
 
-### B. Department Officer Interface (`/officer`)
-- **Assigned Context**: Displays the authenticated officer's department (e.g. Library, Sports, Hostel) directly from `authApi.me()`.
-- **Status Tabs**: Segregates records by `PENDING`, `APPROVED`, `REJECTED`, or `ALL`.
-- **Decision Modal**:
-  - Modal dialog with Approve vs Reject selection.
-  - Strict validation: **remarks are strictly mandatory on rejection** (enforced with a 500-character counter).
-  - Clear error handling for `409 Conflict` (already decided) and `404 Not Found` (unassigned department).
-  - Strict no-optimistic-update pattern: cache invalidation via React Query `refetch()` upon confirmation.
+### B. Shared CsvUpload (`src/components/CsvUpload.jsx`)
+- Reusable drag-and-drop CSV ingestion component adhering to the "Premium Minimalist White" system.
+- **Client-Side Validation**: Restricts input to `.csv` mime types and enforces a strict 2 MB maximum file size limit with accessible inline error alerts.
+- **Template Download**: Dedicated "Download template" action retrieving authenticated `.csv` templates via Axios with `responseType: 'blob'`.
+- **Detailed Execution Report**: Renders metrics for `total_rows`, `created_count`, `updated_count`, and `rejected_count`, alongside an interactive table of rejected rows detailing row numbers and validation failure reasons.
 
-### C. Chairperson / HoD Interface (`/hod` & `/hod/requests/:id`)
-- **Department Scope**: Clarifies the academic department covered by the Chairperson (e.g. *Skill Department of CS/IT*).
+### C. Dynamic Academic Navigation (`src/components/AppShell.jsx`)
+- Uses `GET /departments` and `authApi.me()` to determine if a logged-in `dept_officer` belongs to an `academic` department (`kind === 'academic'`).
+- Conditionally presents the **Student Roster** (`/officer/roster`) and **Lab Catalog** (`/officer/lab-catalog`) navigation links exclusively to academic officers.
+
+### D. Department Officer Interfaces
+- **Queue Interface (`/officer`)**:
+  - Displays assigned department context and status tabs (`PENDING`, `APPROVED`, `REJECTED`, `ALL`).
+  - Server-side search over student name and registration number.
+  - Rows display `declared_is_hosteller` (scoped to Hostel office), declared subject chips matching the officer's lab, `others_note` (for unlinked assigned offices), and a direct link to the clearance dossier.
+  - Decision Modal with Approve/Reject choices, live 500-character counter, mandatory remarks on rejection, and plain text notice explaining approvals with remarks (e.g. *"student did not use this lab"*).
+  - Handles `409 Conflict` and `404 Not Found` without optimistic updates.
+- **Academic Student Roster (`/officer/roster`)**:
+  - Exclusively available to academic department officers for managing students in their department's programmes.
+  - Server-filtered, paginated student roster with search.
+  - "Add Student" modal and "Edit Student" modal. Clear explanation when email edits are rejected with `HTTP 409 Conflict` because an active user account already exists.
+  - Integrated `CsvUpload` utilizing `GET /department/roster/template.csv` and `POST /department/roster/upload`.
+- **Academic Lab Catalog (`/officer/lab-catalog`)**:
+  - Catalog of laboratory subjects belonging to the officer's academic department.
+  - Search and active/inactive status filters.
+  - Create Subject modal allowing mapping to `ASSIGNED_ONLY` service departments.
+  - Inline active toggle (`PATCH /department/lab-courses/{id}` with `{ is_active }`).
+  - Integrated `CsvUpload` utilizing `GET /department/lab-courses/template.csv` and `POST /department/lab-courses/upload`.
+- **Dossier & Add Office (`/officer/requests/:id`)**:
+  - Accessible to all department officers whose office is on the request.
+  - **Academic Officer (Full Dossier)**: Displays full parallel review matrix, student academic profile, hostel residency status, declared lab courses, others note, and "Add Office" modal (`POST /department/requests/{id}/add-department`).
+  - **Service / Non-Academic Officer (Limited Dossier)**: Displays student identity, academic department, own declared lab subjects, hostel declaration (if hostel office), others note (if applicable), and their own department's approval line. Unrelated officers receive `404 Not Found`.
+
+### E. Chairperson / HoD Interface (`/hod` & `/hod/requests/:id`)
 - **Review Queue (`/hod`)**: Lists students in `HOD_REVIEW` status whose prior departmental clearances have all been approved.
 - **Full Dossier View (`/hod/requests/:id`)**:
   - Student identity, course, and enrollment status (Hosteller vs Day Scholar).
-  - Department Sign-off Matrix: Shows every applicable university department, category, status badge, remarks, previous rejection history, and decision dates.
-  - Decision Panel: Approve (grants final clearance and issues digital certificate) or Reject (returns dossier to student with mandatory remarks).
-  - Protected by `AlertDialog` confirmation modal.
+  - Approvals matrix showing status, remarks, decision timestamps, `added_by_name`, and `added_reason`.
+  - Declared lab subjects, hostel status, and others note.
+  - "Add Office" modal allowing HoD to dispatch a request to additional departments (`POST /hod/requests/{id}/add-department`).
+  - Decision Panel: Approve or Reject (returns dossier to student with mandatory remarks).
+  - Prominent display and clipboard copy of `certificate_code` upon approval.
 
-### D. Registrar & Accounts Refund Interface (`/registrar`)
-- **Queue**: Displays requests in `CLEARED` status awaiting security deposit reconciliation.
-- **Live Deduction Calculator**: Form enforcing `0 <= deductions <= deposit_amount` with live net payout preview (`₹Deposit - ₹Deductions = ₹Net Payable`).
-- **Chained Workflow Modal**: Immediately transitions from Step 1 (Verify Refund) to Step 2 (Record Payment Reference) upon verification, allowing seamless input of banking UTR/NEFT references.
+### F. Registrar & Accounts Refund Interface (`/registrar` & `/registrar/requests/:id`)
+- **Queue (`/registrar`)**:
+  - Tabs for `CLEARED` (awaiting refund verification) and `REFUND_VERIFIED` (awaiting payment processing).
+  - Displays student name, registration number, deposit amount, deductions, and final payout amount.
+  - Direct "Inspect" link to the full refund inspection page.
+- **Refund Inspection & Audit Page (`/registrar/requests/:id`)**:
+  - Student identity, programme, and clearance timeline.
+  - **Roster Provenance Panel**: Renders `roster_source` and `roster_created_by_name` exclusively on this page with the advisory notice: *"Check that the roster entry was created by the student's own department"*.
+  - **Audited Bank Details Reveal**:
+    - Masked account display by default (`••••••••1234`).
+    - Dedicated "Reveal full details" trigger prompting an `AlertDialog` warning: *"This action is recorded in the audit log"*.
+    - Mutation configured with `gcTime: 0`; holds decrypted account numbers in transient memory only.
+    - 30-second countdown auto-hide timer and manual "Hide" button.
+    - Handles rate-limiting (`HTTP 429 Too Many Requests`).
+  - **Verify Refund Action**: Form enforcing `0 <= deductions <= deposit_amount` with live calculation of net payable amount and confirmation modal.
+  - **Mark Processed Action**: Modal for recording the bank UTR/NEFT payment reference (`POST /registrar/requests/{id}/mark-processed`).
 
----
-
-## 6. Documented API Gaps & Specifications
-
-1. **API Gap 1 (HoD Certificate Code Visibility)**:
-   - *Issue*: When an HoD grants final approval via `POST /hod/requests/{id}/decision`, the backend creates the `Certificate` row with a UUID, but `HoDRequestDetailResponse` does not include `certificate_code` in its schema.
-   - *Impact*: The HoD UI cannot display the certificate UUID code directly; only the student can retrieve it via `GET /student/requests/{id}/certificate.pdf` (which forbids non-student roles with HTTP 403).
-   - *Recommendation*: Add `certificate_code: Optional[str] = None` to `HoDRequestDetailResponse`.
-
-2. **API Gap 2 (Registrar Cleared Queue Omission)**:
-   - *Issue*: `GET /registrar/queue` hardcodes `ClearanceRequest.status == ClearanceStatus.CLEARED` with no `status` filter query parameter. `POST /registrar/requests/{id}/verify-refund` immediately mutates the request status to `REFUND_VERIFIED`.
-   - *Impact*: Once a request is verified, it disappears from `/registrar/queue`. If the registrar closes the modal or navigates away, the request cannot be retrieved to invoke `POST /registrar/requests/{id}/mark-processed`.
-   - *Frontend Handling*: Implemented an immediate 2-step chained modal so the registrar can input the payment reference directly upon verification.
-   - *Recommendation*: Add a `status` query parameter to `/registrar/queue` supporting `CLEARED` and `REFUND_VERIFIED` filters.
-
-3. **API Gap 3 (Department Queue Search Parameter)**:
-   - *Issue*: `GET /department/queue` only accepts `status`, `limit`, and `offset`. It does not support `search` or `query` parameters.
-   - *Frontend Handling*: Provided client-side filtering on currently loaded page items with clear labeling.
-   - *Recommendation*: Add `search: Optional[str] = Query(None)` to `/department/queue` to filter across student name and registration number.
-
-4. **API Gap 4 (Department Officer Identity Excluded)**:
-   - *Issue*: `DepartmentApprovalItem` exposes `decided_at`, `status`, and `remarks`, but omits `decided_by` or officer name.
-   - *Frontend Handling*: Displayed "Department Officer" with a tooltip explaining that individual officer usernames are omitted by the backend contract.
-
-5. **API Gap 5 (Missing GET /departments Endpoint)**:
-   - *Issue*: The backend requires `department_id` when provisioning staff (`POST /admin/users`) and student lab assignments (`PUT /admin/roster/{id}/assigned-departments`), but exposes no `GET /departments` endpoint.
-   - *Frontend Handling*: Hardcoded the 29 official SVSU departments (academic, service, and assignable labs/workshops) into `src/lib/departments.js` mirroring university seed data.
-   - *Recommendation*: Expose `GET /departments` returning `list[DepartmentResponse]` with `id`, `name`, and `kind`.
-
-6. **API Gap 6 (Missing GET /admin/users Directory Listing)**:
-   - *Issue*: The backend provides `POST /admin/users`, `POST /admin/users/{id}/reset-password`, and `PATCH /admin/users/{id}/active`, but provides no endpoint to list or search existing user accounts.
-   - *Frontend Handling*: The admin dashboard provides a session-provisioned staff directory and a direct User ID administration tool for resetting passwords and toggling active status.
-   - *Recommendation*: Add `GET /admin/users` with pagination, role filtering, and email/name search.
+### G. Student Clearance & 5-Step Application Wizard (`/student/apply` & `/student`)
+- **Declaration-Driven Clearance**:
+  - Clearance departments are declared by the student: hostel residency, lab/workshop courses from the departmental catalog, and additional assigned-only offices.
+- **5-Step Application Wizard (`/student/apply`)**:
+  - **Step 1 (Bank Details)**: Validates Indian bank account, IFSC code, beneficiary name, and branch address (`PUT /student/bank-details`).
+  - **Step 2 (Residence Status)**: Radio cards for Hosteller vs Day Scholar (`is_hosteller`).
+  - **Step 3 (Labs & Workshops)**: Dynamically fetches student's academic lab catalog (`GET /student/lab-catalog`). Features live search filter, course details, and removable summary chips.
+  - **Step 4 (Other Offices & Notes)**: Fetches assigned-only departments (`GET /departments/assigned-only`) and provides an optional note textarea.
+  - **Step 5 (Review & Submission)**: Unified declaration summary card. Requires explicit confirmation checkbox before invoking `POST /student/requests`.
+- **Student Dashboard Enhancements (`/student`)**:
+  - Clearance cards displaying status, remarks, rejection history, declared subjects, and `added_reason` banners.
+  - Targeted resubmission for rejected departments.
+  - "Add More" panel for supplemental assigned offices (`POST /student/requests/{id}/departments`) and lab subjects (`POST /student/requests/{id}/lab-courses`).
+  - Digital Certificate download (`GET /student/requests/{id}/certificate.pdf`).
 
 ---
 
-## 7. Phase 3 Deliverables & System Administration Architecture
+## 6. Resolved Backend Capabilities & API Contract Compliance
 
-### A. Master Student Roster & CSV Ingestion (`/admin`)
-- **Master Student Directory**: Paginated, server-filtered `DataTable` (`GET /admin/roster`) displaying registration numbers, names, emails, mobile, programmes, hosteller status, and security deposits.
-- **Roster Profile Editor**: Dialog allowing administrators to update hosteller residency, security deposit amounts, addresses, and mobile numbers (`PATCH /admin/roster/{id}`).
-- **Assigned Laboratories & Workshops**: Multi-select modal allowing assignment of specialized service departments (IDs 17–29: Lab-1 to Lab-9, Workshop-1 to Workshop-3, Others) via `PUT /admin/roster/{id}/assigned-departments`.
-- **CSV Batch Ingestion**:
-  - Drag-and-drop file ingestion zone with sample CSV template download.
-  - Validates and parses 8 required column headers: `registration_number, name, email, mobile, address, programme, is_hosteller, security_deposit_amount`.
-  - Ingests via `POST /admin/roster/upload` and renders a row-by-row execution report with status badges (`CREATED`, `UPDATED`, `REJECTED`) and detailed diagnostic messages.
+All previously identified backend capability gaps have been completely resolved and verified against the live backend contract:
 
-### B. Staff Provisioning & Credential Security
-- **Staff Provisioning Form**: Enables administrators to create accounts for `dept_officer`, `hod`, and `registrar_accounts`. Dynamically restricts department selection (HoDs are restricted strictly to academic departments).
-- **One-Time Temporary Password Architecture**:
-  - Temporary passwords returned by `POST /admin/users` and `POST /admin/users/{id}/reset-password` are displayed in a high-security modal with clipboard copy support.
-  - The modal explicitly warns the administrator that credentials are displayed once and cannot be retrieved again.
-  - Cleared from component memory immediately upon modal dismissal; never stored in localStorage, sessionStorage, or logs.
-- **Direct User ID Administration**:
-  - Allows instant temporary password resets for any user ID (`POST /admin/users/{id}/reset-password`).
-  - Allows account activation or deactivation (`PATCH /admin/users/{id}/active`).
-  - Enforces client-side and server-side self-deactivation protection preventing administrators from locking out their own accounts.
+1. **Queue Item Hostel & Special Declaration Scoping (`GET /department/queue`)**:
+   - `DepartmentQueueItem` provides `declared_is_hosteller` (scoped as a boolean strictly for the Hostel office, and `null` for other offices).
+   - `others_note` is returned for dealing offices that are on the request but unlinked to any specific lab course.
+   - Frontend renders badges for hostel residency status and notes on both desktop table rows and mobile card layouts.
 
-### C. Public Verification Portal (`/verify`, `/verify/:code`)
-- Accessible publicly without authentication.
-- Automatically captures the `:code` URL parameter from QR codes embedded in downloaded clearance certificates.
-- Calls `GET /verify/{certificate_code}` and renders high-visibility validation results using text and icons (not color alone) to verify student identity, registration number, programme, department, and issue timestamp.
+2. **Cross-Department Dossier Access (`GET /department/requests/{id}`)**:
+   - All department officers whose office is on an active clearance request can view the clearance dossier.
+   - Student's academic department officer receives the full dossier (complete approval matrix and candidate offices to add).
+   - Non-academic officers receive a limited dossier (student details, academic department, own declared lab subjects, hostel declaration if hostel office, others note if applicable, and their own approval record). Officers from unrelated departments receive `404 Not Found`.
 
-### D. System Polish & Resilience
-- **Global Error Boundary (`ErrorBoundary.jsx`)**: Wraps application routes to catch unhandled JavaScript rendering exceptions and presents a clean recovery screen with "Reload Page" and "Return to Home".
-- **Logout Confirmation Dialog**: `AlertDialog` in `AppShell` intercepts sign-out actions to prevent accidental session termination.
-- **Dynamic Document Titles**: `useDocumentTitle` hook dynamically sets descriptive window titles (e.g. `Institutional Admin | SVSU No-Dues`).
-- **Performance & Code-Splitting**: Lenis momentum scrolling and GSAP animation engines are dynamically imported (`import()`) exclusively on the public Landing route, maintaining small, fast bundles for all authenticated dashboard views.
+3. **Student Security Deposit Refund Visibility (`GET /student/requests/current`)**:
+   - Returns complete refund financial status: `refund_status`, `deposit_amount`, `deductions`, `final_amount`, and transaction `payment_reference` (UTR/NEFT) once disbursed.
+   - Frontend dashboard renders a dedicated "Security Deposit Refund Summary" card when financial data is present.
+
+4. **Dynamic Other Offices Validation (`POST /student/requests`)**:
+   - Supports `other_department_ids` (and alias `other_office_ids`), validating offices are `ASSIGNED_ONLY`, unlinked to lab courses in the catalog, and have an active officer.
+
+5. **Mid-Clearance Lab Course Declaration (`POST /student/requests/{id}/lab-courses`)**:
+   - Fully registered on the student router and confirmed in `/openapi.json`. Automatically rolls request status back to `SUBMITTED` if currently in `HOD_REVIEW`.
+
+6. **System Health Check & Security Guardrails (`GET /health`)**:
+   - Database probe endpoint (`SELECT 1`) returning `200 OK` or `503 Service Unavailable`.
+   - Production startup validation enforces secret length, disabling console mail, disabling dev OTPs, and Fernet encryption key configuration.
+
+---
+
+## 7. Institutional Administration & Verification Architecture
+
+### A. Offices & Staffing Health Dashboard (`/admin/offices`)
+- **Primary Admin Screen**: Serves as the landing hub for system administrators.
+- **Department Staffing Health**: Table rendering every university department, categorization (`academic` vs `service`), active officers, and HoD assignment.
+- **Staffing Gap Badges**: High-visibility warning badges (`Needs Officer`, `Needs HoD`) flagging unstaffed offices that would block student clearance workflows.
+- **Summary KPI Strip**: Live counters for total offices, academic faculties, service branches, and total offices needing staff.
+- **Direct Assignment Actions**: Table row shortcuts to provision a dedicated officer or HoD directly for that department.
+
+### B. Staff & User Directory (`/admin/users`)
+- **User Directory**: Searchable, role-filtered, department-filtered, and active-status-filtered paginated `DataTable` (`GET /admin/users`).
+- **Staff Provisioning Form**: Enables administrators to create accounts for `dept_officer`, `hod`, `registrar_accounts`, and `admin`. Dynamically restricts Chairperson (HoD) provisioning strictly to academic departments.
+- **Bulk Staff CSV Upload**:
+  - Ingestion modal with sample template download (`email, full_name, role, department`).
+  - Row-by-row diagnostic report (`total_rows`, `created_count`, `rejected_count`).
+  - Secure credential table with individual copy actions and a one-time "Download credentials CSV" option.
+- **One-Time Temporary Password Security**:
+  - Temporary passwords returned by user creation, bulk upload, or password resets are held strictly in component memory and displayed in a high-security dialog.
+  - Cleared immediately upon dialog dismissal; never persisted in localStorage, sessionStorage, URLs, or console logs.
+- **Credential Administration**:
+  - Instant temporary password reset for any user (`POST /admin/users/{id}/reset-password`).
+  - Account activation and deactivation toggle (`PATCH /admin/users/{id}/active`) with confirmation dialogs and self-deactivation protection.
+
+### C. Master Roster & Lab Course Fallbacks (`/admin/roster` & `/admin/lab-courses`)
+- **Global Student Roster (`/admin/roster`)**: Searchable roster directory, contact profile editing (mobile & address), and CSV upload. Note: residency and security deposit columns are hidden from this view with an advisory notice, as residency is declared directly by students when applying and deposit amounts are verified by Accounts during refund processing.
+- **Global Lab Course Catalog (`/admin/lab-courses`)**: Comprehensive lab course directory across all academic faculties, course creation modal (mapping to `ASSIGNED_ONLY` service departments), metadata editor, and active status toggle.
+
+### D. Public Certificate Verification (`/verify`, `/verify/:code`)
+- **Zero-Authentication Verification**: Publicly accessible page for employers and third parties to verify certificate validity.
+- **QR Code Target**: Resolves directly when scanning the QR code embedded in student clearance certificates (`/verify/:code`).
+- **Privacy-Preserving Verification**: Displays certificate validity using icons and text (not color alone), rendering issue timestamp, masked student roll number, programme, and academic department (never reveals student names, emails, phones, or bank details).
+
+### E. System Polish, Performance & Accessibility
+- **Bundle Splitting & Lazy Engines**: Lenis momentum scrolling and GSAP animation engines are dynamically imported (`import()`) exclusively on the public Landing route (`/`). Authenticated dashboard views remain lightweight and calm.
+- **Sub-300ms Transitions**: Micro-interactions and dialog transitions run with hardware-accelerated transforms and collapse to 0ms when `prefers-reduced-motion` is active.
+- **Accessibility & Contrast**: High-contrast `:focus-visible` rings, ARIA landmark semantics, Radix UI dialog focus trapping, and WCAG AA contrast compliance.
+- **Session Lifecycle**: 401 response interceptor in `axios.js` automatically purges expired tokens and smoothly routes back to `/login` with an informational toast.
+- **Global Error Boundary (`ErrorBoundary.jsx`)**: Catches unhandled JavaScript rendering exceptions and presents a clean recovery screen with "Reload Page" and "Return to Home".
 
 ---
 
 ## 8. Seeded Demo Accounts Reference
 
-All seeded demo accounts in the development database are created via `backend/scripts/seed_synthetic.py`. Default passwords are never published in public documentation; they are derived from the `SEED_DEFAULT_PASSWORD` environment variable in `backend/.env`.
+All seeded demo accounts in the development database are created via `backend/scripts/seed_synthetic.py`. Default passwords are never published in public documentation; in development environments, they are derived from the `SEED_DEFAULT_PASSWORD` environment variable in `backend/.env`.
+
+**Pilot Invariant — Zero Demo Students**: To maintain real data integrity for production and pilot deployments, zero demo students are seeded into the system. Student roster entries must be ingested by academic departments or administrators.
 
 | Role | Demo Email Address | User Full Name / Scope |
 |---|---|---|
-| **System Administrator** | `admin@example.edu` | System Administrator (Demo) |
-| **Registrar / Accounts** | `registrar.accounts@example.edu` | Accounts Officer (Demo) / R&S Branch |
-| **Chairperson (HoD) CS/IT** | `hod.csit@example.edu` | Chairperson Skill Department of CS/IT (Demo) |
-| **Department Officer (Library)** | `library.officer@example.edu` | Library Officer (Demo) / Central Library |
-| **Department Officer (Hostel)** | `hostel.officer@example.edu` | Hostel (Boys/Girls) Officer (Demo) |
-| **Department Officer (Sports)** | `sports.officer@example.edu` | Sports Officer (Demo) / Sports Section |
-| **Department Officer (CS/IT)** | `officer.csit@example.edu` | Skill Department of CS/IT Officer (Demo) |
-| **Department Officer (Accounts)** | `accounts.officer@example.edu` | Account Section Officer (Demo) |
-| **Student 1 (Hosteller)** | `arjun.mehta@example.edu` | Arjun Mehta (DEMO2026001, B.Tech CE, Assigned: Lab-2, Lab-5) |
-| **Student 2 (Hosteller)** | `priya.sharma@example.edu` | Priya Sharma (DEMO2026002, MCA, Assigned: Lab-3) |
-| **Student 3 (Day Scholar)** | `sneha.patel@example.edu` | Sneha Patel (DEMO2026004, B.Voc Solar Technology) |
-| **Unregistered Student (Sign-Up Demo)** | `aman.gupta@example.edu` | Aman Gupta (DEMO2026006, test OTP sign-up flow) |
+| **System Administrator** | `admin@svsu.ac.in` | System Administrator (Demo) |
+| **Registrar / Accounts** | `registrar.accounts@svsu.ac.in` | Accounts Officer (Demo) / R&S Branch |
+| **Chairperson (HoD) CS/IT** | `hod.csit@svsu.ac.in` | Chairperson Skill Department of CS/IT (Demo) |
+| **Academic Officer (CS/IT)** | `officer.csit@svsu.ac.in` | Skill Department of CS/IT Officer (Demo) |
+| **Department Officer (Library)** | `library.officer@svsu.ac.in` | Library Officer (Demo) / Central Library |
+| **Department Officer (Hostel)** | `hostel.officer@svsu.ac.in` | Hostel (Boys/Girls) Officer (Demo) |
+| **Department Officer (Sports)** | `sports.officer@svsu.ac.in` | Sports Officer (Demo) / Sports Section |
+| **Department Officer (Accounts)** | `accounts.officer@svsu.ac.in` | Account Section Officer (Demo) |
 
-> **Institutional Email Format Note**: Real university email formats (students: `<registration_number>@svsu.ac.in`, staff: `<name>@svsu.ac.in`) are accepted and normalized by the system during production registration and login, but they are not part of the demo dataset. All seeded demo accounts exist strictly on the `@example.edu` domain.
+> **Development Quick-Fill Chips & Leak Prevention**:
+> - Quick-fill chips on the `/login` page are rendered exclusively in development mode (`import.meta.env.DEV`). They pre-fill staff emails only and never auto-populate passwords.
+> - The production build (`npm run build`) automatically executes `npm run check:leaks` (`frontend/scripts/check_leaks.mjs`), which scans all compiled assets in `dist/` and aborts if forbidden patterns (`example.edu`, `DEMO2026`, or `dev_otp`) are detected.
+
+---
+
+## 9. Security, Cancellation & Pilot Hardening
+
+### A. Forced & Voluntary Password Change (`/change-password`)
+- **Forced Password Change Enforcement**:
+  - Accounts provisioned by an administrator or reset via temporary password carry `must_change_password: true` in `/auth/me` and the login response.
+  - While this flag is active, `ProtectedRoute` and the Axios 403 interceptor (`detail === 'PASSWORD_CHANGE_REQUIRED'`) redirect navigation to `/change-password` and block access to any other route.
+  - Nav links in `AppShell` are hidden while keeping "Sign Out" completely accessible.
+  - Form requires current password, new password ($\ge$ 10 characters, different from current), and confirm password match, with a real-time reactive checklist and show/hide toggles.
+- **Voluntary Password Change**:
+  - Accessible to all authenticated roles via the user profile dropdown menu in `AppShell`.
+  - On successful update, calls `refreshProfile()` to sync state and redirects to the role's default view.
+
+### B. Sign-Up, Rate Limits & Anti-Enumeration
+- **Enumeration Resistance**:
+  - `POST /auth/signup/request-otp` always responds with a generic dispatch message (`"If the details match our records, a code has been sent to your university email."`).
+  - The frontend always advances to Step 2 (Verification code entry) and displays this message to prevent account enumeration.
+  - Dev OTP hints are strictly guarded by `import.meta.env.DEV`.
+- **Rate Limit Resilience (HTTP 429)**:
+  - Both Login and Sign-Up inspect `Retry-After` response headers, display a user-friendly notice in minutes, and disable submit actions during the active cooldown period.
+  - A dedicated "Resend code" button features an active countdown timer (60s).
+- **Password Strength**:
+  - Student registration requires a minimum 10-character password.
+
+### C. Clearance Request Cancellation (`CANCELLED` Lifecycle)
+- **Status Integration**: `CANCELLED` is integrated into `StatusBadge`, `StepTimeline`, dashboards, and queues.
+- **Student Cancellation**:
+  - Displayed on the student dashboard only when **all** departmental reviews are in `PENDING` status.
+  - Requires a mandatory cancellation reason (`POST /student/requests/{id}/cancel`).
+  - Once cancelled, an informative banner is displayed alongside an "Apply Again" button routing to `/student/apply`.
+- **Academic Officer Cancellation**:
+  - Available in `/officer/requests/:id` exclusively for academic department officers.
+  - Hidden when the request is `CLEARED`, `REFUND_VERIFIED`, or `CANCELLED`.
+  - Requires a mandatory audit reason (`POST /department/requests/{id}/cancel`).
+- **Administrative Emergency Cancellation**:
+  - Administrators can cancel an active clearance request by specifying its ID and an audit reason via `POST /admin/requests/{id}/cancel`.
+- **API Gap Note**:
+  - *Admin Request Search Gap*: The backend provides `POST /admin/requests/{id}/cancel` for request cancellation by ID, but lacks a search or listing endpoint (`GET /admin/requests?search=...`) to look up clearance requests by student roll number or name. The frontend currently surfaces an ID-based cancellation card on `/admin/offices`.
+
+### D. Public Help & Guide (`/help`)
+- A public static guide explaining the 5-step digital clearance lifecycle, deposit refund policies, and QR code certificate verification.
+- Displays technical support contact info from `VITE_SUPPORT_EMAIL` when configured in `.env` (hidden when unset).
+- Emphasizes the university security reminder: *"You never need to share your account credentials or verification codes with anyone."*
+
+---
+
+## 10. Google Authentication (OAuth2 SSO) & Content-Security-Policy (CSP)
+
+### A. Authentication Architecture & Flow
+1. **Startup Configuration (`GET /auth/config`)**:
+   - Loaded once at startup using TanStack Query (`useAuthConfig` hook with `staleTime: Infinity`).
+   - Retrieves `google_enabled`, `google_client_id`, `allowed_domain_hint`, and `otp_signup_enabled`.
+2. **Lazy-Loaded Google Identity Services (GIS)**:
+   - When `google_enabled` is true and `google_client_id` is present, the GIS client script (`https://accounts.google.com/gsi/client`) is lazy-loaded strictly on the `/login` page.
+   - Initialized with `client_id` and renders an official "Continue with Google" button with the subtext: `Use your university account (@<allowed_domain_hint>)`.
+   - Credentials returned in the callback are sent directly to `POST /auth/google { credential }`. The raw token is **never stored locally** in browser storage or cookies.
+   - On successful response, tokens are persisted in `localStorage` via `AuthContext`, followed by `/auth/me` profile fetching and automatic role-based redirect.
+3. **Staff & Admin Email/Password Section**:
+   - Rendered below the Google button as a collapsed `<details>` section: *"Staff and admin: sign in with email and password"*.
+   - If Google sign-in is disabled, missing a client ID, or blocked by a browser privacy extension, this section automatically expands.
+   - Development quick-fill chips (`import.meta.env.DEV` only) pre-fill the staff email and automatically open the password section.
+
+### B. Error Handling & Edge States
+- **`NOT_ELIGIBLE` (HTTP 403)**:
+  - Triggered when a student's Google email does not exist on the approved academic roster.
+  - Displays a clean amber alert panel: *"Your account is not in the student list. Please contact your department office."*
+- **`ACCOUNT_DISABLED` (HTTP 403)**:
+  - Triggered when a user account has been deactivated by an administrator.
+  - Displays a rose alert panel: *"Your account has been deactivated. Please contact your department office or administrator."*
+- **`SUB_MISMATCH` (HTTP 403)**:
+  - Triggered if an existing user attempts to log in with a different Google account ID.
+  - Displays: *"Google account ID mismatch. Please sign in with the university Google account originally linked to your record."*
+- **Rate Limit (HTTP 429)**:
+  - Reads the `Retry-After` header in seconds and formats it in minutes.
+  - Temporarily pauses sign-in with an active countdown timer.
+- **Script Failure / Privacy Blocker**:
+  - If GIS fails to load or is blocked by browser tracking protection, displays: *"Google sign-in could not load. Staff can use email and password; students, please try another browser or disable tracking protection for this site."*
+  - Automatically opens the staff email and password form.
+- **Missing Client ID**:
+  - The Google button is completely hidden and the login card defaults cleanly to the standard password form.
+
+### C. Student Sign-Up Redirection (`/signup`)
+- When `otp_signup_enabled` is `false`, any navigation to `/signup` immediately redirects to `/login` with an informational banner: *"Students now sign in with their university Google account. No separate sign-up is needed."*
+- When `otp_signup_enabled` is `true`, the traditional 2-step OTP registration flow remains active.
+
+### D. Administrator User Provisioning (`/admin/users`)
+- **Single User Provisioning**:
+  - Includes a "Google sign-in only (no password)" toggle.
+  - When enabled, `google_only: true` is sent to `POST /admin/users`. The user is created without a password, and the one-time temporary password modal is suppressed with a toast notification: *"This user signs in with Google."*
+- **Bulk Staff Provisioning**:
+  - Supports an optional `google_only` (true/false) column in the uploaded CSV.
+  - Provides a toggle to force all uploaded accounts to Google sign-in only.
+  - The downloadable CSV template is updated to include the `google_only` column.
+
+### E. Content-Security-Policy (CSP) Sources for Production
+When deploying behind a reverse proxy (e.g., NGINX, Cloudflare, Caddy), configure the following CSP directives to allow Google Identity Services and the backend API:
+
+```http
+Content-Security-Policy:
+  default-src 'self';
+  script-src 'self' https://accounts.google.com/gsi/client;
+  frame-src 'self' https://accounts.google.com/gsi/;
+  connect-src 'self' https://accounts.google.com/gsi/ https://api.nodues.svsu.ac.in;
+  style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style;
+  font-src 'self' data:;
+  img-src 'self' data: https://accounts.google.com/;
+```
+
+---
+
+## 10. Cold-Start Resilience & Wording Governance
+
+### A. Free-Tier Cloud Hosting Cold-Start Handling
+- **Extended Request Timeout**: Axios timeout is configured to **90 seconds** (`90000ms`) across all client requests to comfortably accommodate initial container boot times on free-tier hosting (e.g. Render, Railway).
+- **Non-Blocking Wake-up Banner**: If any API request exceeds **4 seconds** before receiving a response, a non-blocking banner appears at the top of the viewport:
+  > *"The server is waking up. This can take up to a minute the first time."*
+  - Uses `pointer-events-none` so user interaction is never interrupted.
+  - Automatically unmounts / clears once slow in-flight requests resolve.
+- **GET Request Auto-Retry**: Idempotent `GET` requests are automatically retried **once** upon network errors or gateway status codes (`HTTP 502`, `HTTP 503`, `HTTP 504`).
+- **Strict No-Retry on Mutations**: `POST`, `PUT`, `PATCH`, and `DELETE` requests are **never retried automatically**, avoiding duplicate clearance actions, submissions, or transactions.
+
+### B. Wording Governance & Build-Time Audits
+- **Zero Tech-Stack Mentions in User UI**: Mentions of frameworks (FastAPI, React 19, Tailwind CSS, shadcn/ui, Vite, PostgreSQL, etc.) are strictly prohibited across all user-facing text, page titles, meta tags, and tooltips.
+- **Standardized University Footer**: All public and authenticated layouts render the clean copyright:
+  > *"© 2026 Shri Vishwakarma Skill University"*
+- **Automated Verification in `npm run build`**:
+  1. `npm run check:leaks`: Rejects bundles in `dist/` containing forbidden development identifiers (`example.edu`, `DEMO2026`, `dev_otp`).
+  2. `npm run check:wording`: Scans all files in `src/` and `index.html` for forbidden terms (`demo`, `FastAPI`, `Tailwind`, `shadcn`, `React 19`, `synthetic`), allowing exemptions only when explicitly annotated with `wording-ok`.
+  3. `npm run check:contract`: Verifies 100% frontend API client alignment against the OpenAPI contract.
+
+
+
 
 
 
