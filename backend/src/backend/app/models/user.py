@@ -58,7 +58,13 @@ class User(Base):
         Index("ix_users_google_sub", "google_sub"),
     )
 
-    department = relationship("Department", back_populates="users")
+    department = relationship("Department", back_populates="users", foreign_keys=[department_id])
+    department_memberships = relationship(
+        "UserDepartment",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="UserDepartment.user_id",
+    )
     roster_entry = relationship("StudentRoster", back_populates="user", foreign_keys=[roster_id])
     hod_clearances = relationship(
         "ClearanceRequest", back_populates="hod_user",
@@ -72,3 +78,31 @@ class User(Base):
         "Certificate", back_populates="hod_user",
         foreign_keys="Certificate.hod_user_id"
     )
+
+
+class UserDepartment(Base):
+    __tablename__ = "user_departments"
+
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    department_id = Column(
+        Integer, ForeignKey("departments.id", ondelete="RESTRICT"), primary_key=True
+    )
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    created_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    __table_args__ = (
+        Index("ix_user_departments_department_id", "department_id"),
+    )
+
+    user = relationship("User", back_populates="department_memberships", foreign_keys=[user_id])
+    department = relationship("Department", back_populates="user_memberships", foreign_keys=[department_id])
+    creator = relationship("User", foreign_keys=[created_by_user_id])
+

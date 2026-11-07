@@ -42,6 +42,15 @@ export function OfficerLabCatalogPage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(25)
 
+  // Multi-academic department support
+  const academicMemberships = useMemo(() => {
+    const depts = user?.departments || []
+    return depts.filter((d) => d.kind === 'academic')
+  }, [user?.departments])
+
+  const hasMultipleAcademic = academicMemberships.length > 1
+  const [selectedDeptId, setSelectedDeptId] = useState('ALL')
+
   // Dialog States
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
@@ -53,6 +62,7 @@ export function OfficerLabCatalogPage() {
     name: '',
     lab_department_id: '',
     specialization: '',
+    academic_department_id: '',
   })
   const [createError, setCreateError] = useState('')
 
@@ -77,12 +87,13 @@ export function OfficerLabCatalogPage() {
     isLoading,
     refetch,
   } = useQuery({
-    queryKey: ['department', 'lab-courses', activeFilter, pageIndex, pageSize],
+    queryKey: ['department', 'lab-courses', activeFilter, pageIndex, pageSize, selectedDeptId],
     queryFn: () =>
       departmentApi.getLabCourses({
         is_active: activeFilter === 'ALL' ? undefined : activeFilter === 'ACTIVE',
         limit: pageSize,
         offset: pageIndex * pageSize,
+        departmentId: selectedDeptId === 'ALL' ? undefined : selectedDeptId,
       }),
   })
 
@@ -143,6 +154,7 @@ export function OfficerLabCatalogPage() {
       name: '',
       lab_department_id: assignedOnlyDepts[0]?.id ? String(assignedOnlyDepts[0].id) : '',
       specialization: '',
+      academic_department_id: academicMemberships[0]?.id ? String(academicMemberships[0].id) : '',
     })
     setCreateModalOpen(true)
   }
@@ -164,7 +176,16 @@ export function OfficerLabCatalogPage() {
       setCreateError('Course code, name, and assigned signing lab office are mandatory.')
       return
     }
-    createMutation.mutate(createForm)
+    const payload = {
+      code: createForm.code.trim(),
+      name: createForm.name.trim(),
+      lab_department_id: Number(createForm.lab_department_id),
+      specialization: createForm.specialization.trim() || undefined,
+    }
+    if (hasMultipleAcademic && createForm.academic_department_id) {
+      payload.academic_department_id = Number(createForm.academic_department_id)
+    }
+    createMutation.mutate(payload)
   }
 
   const handleEditSubmit = (e) => {
@@ -359,7 +380,7 @@ export function OfficerLabCatalogPage() {
           {/* TAB 1: Lab Courses List */}
           <TabsContent value="list" className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Button
                   variant={activeFilter === 'ALL' ? 'default' : 'outline'}
                   size="sm"
@@ -393,6 +414,24 @@ export function OfficerLabCatalogPage() {
                 >
                   Inactive
                 </Button>
+
+                {hasMultipleAcademic && (
+                  <select
+                    value={selectedDeptId}
+                    onChange={(e) => {
+                      setSelectedDeptId(e.target.value)
+                      setPageIndex(0)
+                    }}
+                    className="h-8 rounded-md border border-input bg-white px-2.5 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="ALL">All Academic Depts</option>
+                    {academicMemberships.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <Button
@@ -459,6 +498,29 @@ export function OfficerLabCatalogPage() {
             )}
 
             <div className="space-y-3.5 py-1 text-xs">
+              {hasMultipleAcademic && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="academicDeptSelect" className="text-xs font-semibold text-zinc-800">
+                    Academic Department *
+                  </Label>
+                  <select
+                    id="academicDeptSelect"
+                    value={createForm.academic_department_id}
+                    onChange={(e) =>
+                      setCreateForm({ ...createForm, academic_department_id: e.target.value })
+                    }
+                    className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    required
+                  >
+                    {academicMemberships.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <Label htmlFor="labCode" className="text-xs font-semibold text-zinc-800">
                   Course / Subject Code *

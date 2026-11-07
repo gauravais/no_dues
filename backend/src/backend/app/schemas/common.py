@@ -10,3 +10,11 @@ class ErrorResponse(BaseModel):
 class MessageResponse(BaseModel):
     """Generic informational response payload."""
     detail: str = Field(..., description="Status or acknowledgment message", examples=["Action completed successfully"])
+
+
+class DepartmentBrief(BaseModel):
+    """Brief metadata for a department membership."""
+    id: int = Field(..., description="Department ID", examples=[1])
+    name: str = Field(..., description="Department name", examples=["Skill Department of CS/IT"])
+    kind: str = Field(..., description="Department kind: academic or service", examples=["academic"])
+

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/auth/AuthContext'
@@ -55,8 +55,29 @@ export function AppShell({ children }) {
     enabled: Boolean(user && isOfficer),
   })
 
-  const officerDept = departments.find((d) => d.id === user?.department_id)
-  const isAcademicOfficer = isOfficer && officerDept?.kind === 'academic'
+  // Multi-department membership extraction
+  const userDepts = useMemo(() => {
+    if (user?.departments && user.departments.length > 0) {
+      return user.departments
+    }
+    if (user?.department_id) {
+      const found = departments.find((d) => d.id === user.department_id)
+      return [
+        {
+          id: user.department_id,
+          name: user.department_name,
+          kind: found?.kind || 'service',
+        },
+      ]
+    }
+    return []
+  }, [user, departments])
+
+  const academicMemberships = useMemo(
+    () => userDepts.filter((d) => d.kind === 'academic'),
+    [userDepts]
+  )
+  const isAcademicOfficer = isOfficer && academicMemberships.length > 0
 
   const navLinks = user?.must_change_password
     ? [{ label: 'Change Password', path: '/change-password' }]
@@ -150,20 +171,42 @@ export function AppShell({ children }) {
                           >
                             {ROLE_LABELS[user.role] || user.role}
                           </Badge>
-                          {user.department_name && (
-                            <span className="text-[11px] text-muted-foreground truncate max-w-[120px]">
-                              • {user.department_name}
+                          {userDepts.length > 1 ? (
+                            <span className="text-[11px] text-muted-foreground truncate max-w-[130px]">
+                              • {userDepts.length} offices
                             </span>
-                          )}
+                          ) : userDepts.length === 1 ? (
+                            <span className="text-[11px] text-muted-foreground truncate max-w-[130px]">
+                              • {userDepts[0].name}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                       <ChevronDown className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56 bg-white shadow-lg border border-zinc-200">
+                  <DropdownMenuContent align="end" className="w-64 bg-white shadow-lg border border-zinc-200">
                     <DropdownMenuLabel className="text-xs font-normal text-muted-foreground py-1.5">
                       Signed in as <span className="font-semibold text-zinc-900 block truncate">{user.email}</span>
                     </DropdownMenuLabel>
+                    {userDepts.length > 0 && (
+                      <div className="px-2 py-1.5 border-t border-b border-zinc-100 bg-zinc-50/50">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 block mb-1">
+                          Assigned Offices ({userDepts.length})
+                        </span>
+                        <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto">
+                          {userDepts.map((d) => (
+                            <Badge
+                              key={d.id}
+                              variant="outline"
+                              className="text-[10px] py-0 px-1.5 bg-white border-zinc-200 text-zinc-700"
+                            >
+                              {d.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem asChild>
                       <Link to="/change-password" className="cursor-pointer flex items-center gap-2 text-xs py-1.5">
@@ -242,16 +285,29 @@ export function AppShell({ children }) {
                     SVSU NO-DUES
                   </SheetTitle>
                   {user && (
-                    <div className="mt-2">
+                    <div className="mt-2 space-y-1">
                       <p className="text-xs font-semibold text-zinc-900 truncate">
                         {user.full_name || user.email}
                       </p>
                       <Badge
                         variant="outline"
-                        className="mt-1 text-[10px] font-medium bg-zinc-50 text-zinc-600"
+                        className="text-[10px] font-medium bg-zinc-50 text-zinc-600"
                       >
                         {ROLE_LABELS[user.role] || user.role}
                       </Badge>
+                      {userDepts.length > 0 && (
+                        <div className="flex flex-wrap gap-1 pt-1">
+                          {userDepts.map((d) => (
+                            <Badge
+                              key={d.id}
+                              variant="outline"
+                              className="text-[9px] py-0 px-1 bg-zinc-50 text-zinc-700 border-zinc-200"
+                            >
+                              {d.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </SheetHeader>

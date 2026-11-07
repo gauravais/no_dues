@@ -1,6 +1,8 @@
 """Pydantic schemas for authentication and user profiles."""
 from decimal import Decimal
 from pydantic import BaseModel, EmailStr, Field
+from backend.app.schemas.common import DepartmentBrief
+
 
 
 class SignupOTPRequest(BaseModel):
@@ -118,5 +120,7 @@ class UserMeResponse(BaseModel):
     role: str = Field(..., description="System role identifier", examples=["student"])
     department_id: int | None = Field(None, description="Assigned department ID (for staff and HoD)", examples=[4])
     department_name: str | None = Field(None, description="Assigned department title", examples=["Skill Department of CS/IT"])
+    departments: list[DepartmentBrief] = Field(default_factory=list, description="All department memberships for the user")
     must_change_password: bool = Field(False, description="Whether the user must change password before accessing system")
     roster: RosterSummary | None = Field(None, description="Detailed roster info if user role is student")
+

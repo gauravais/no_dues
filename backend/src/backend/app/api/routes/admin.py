@@ -14,12 +14,12 @@ from sqlalchemy.orm import joinedload
 from backend.app.api.deps import SessionDep, require_roles
 from backend.app.core.config import settings
 from backend.app.core.security import hash_password, normalize_email
-from backend.app.models.user import User, UserRole
+from backend.app.models.user import User, UserRole, UserDepartment
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
 from backend.app.models.university import Department, Programme, DepartmentKind, DepartmentApplicability
 from backend.app.models.lab_course import LabCourse
 from backend.app.models.audit import AuditLog
-from backend.app.schemas.common import ErrorResponse
+from backend.app.schemas.common import ErrorResponse, DepartmentBrief
 from backend.app.schemas.admin import (
     RosterUploadResponse,
     RosterUploadRowReport,
@@ -29,6 +29,8 @@ from backend.app.schemas.admin import (
     RosterAssignedDepartmentsRequest,
     AdminCreateUserRequest,
     AdminUserResponse,
+    AdminUserDetailResponse,
+    AddUserDepartmentRequest,
     AdminResetPasswordResponse,
     AdminUserActiveRequest,
     AdminUserListItem,
@@ -48,7 +50,14 @@ from backend.app.schemas.department import (
 )
 
 from backend.app.schemas.workflow import StaffCancelRequest, CancelResponse
-from backend.app.services.workflow import staff_cancel_request
+from backend.app.services.workflow import (
+    staff_cancel_request,
+    user_department_ids,
+    get_user_departments,
+    active_officers_for,
+    active_hod_for,
+)
+
 from backend.app.services.exceptions import (
     WorkflowBadRequestError,
     WorkflowNotFoundError,
@@ -626,27 +635,51 @@ def create_staff_user(
     if existing_user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"User with email '{email_clean}' already exists")
 
-    # Department validation
-    dept = None
+    # Department normalization & validation
+    if body.department_ids is not None:
+        dept_ids = list(dict.fromkeys(body.department_ids))
+    elif body.department_id is not None:
+        dept_ids = [body.department_id]
+    else:
+        dept_ids = []
+
+    depts: list[Department] = []
     if body.role in (UserRole.dept_officer, UserRole.hod):
-        if not body.department_id:
+        if not dept_ids:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Department ID is mandatory for role '{body.role.value}'",
             )
-        dept = db.get(Department, body.department_id)
-        if not dept:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department ID {body.department_id} not found")
+        for did in dept_ids:
+            d = db.get(Department, did)
+            if not d:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department ID {did} not found")
+            if body.role == UserRole.hod and d.kind != DepartmentKind.academic:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Chairperson (HoD) user must belong to an academic department. '{d.name}' is a service department.",
+                )
+            depts.append(d)
+    elif body.role == UserRole.registrar_accounts:
+        rs_dept = db.execute(
+            select(Department).where(func.lower(Department.name).in_(["r&s branch", "registration & scholarship branch"]))
+        ).scalars().first()
+        if dept_ids:
+            for did in dept_ids:
+                d = db.get(Department, did)
+                if not d:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department ID {did} not found")
+                if rs_dept and d.id != rs_dept.id:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="registrar_accounts must be assigned to R&S Branch")
+                depts.append(d)
+        elif rs_dept:
+            depts.append(rs_dept)
+    else:
+        if dept_ids:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Admin and student roles cannot have department assignments.")
 
-        if body.role == UserRole.hod and dept.kind != DepartmentKind.academic:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Chairperson (HoD) user must belong to an academic department. '{dept.name}' is a service department.",
-            )
-    elif body.department_id:
-        dept = db.get(Department, body.department_id)
-        if not dept:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department ID {body.department_id} not found")
+    primary_dept_id = depts[0].id if depts else None
+    primary_dept = depts[0] if depts else None
 
     # Handle Google-only accounts vs password accounts
     if body.google_only:
@@ -665,7 +698,7 @@ def create_staff_user(
         full_name=body.full_name.strip(),
         password_hash=pw_hash,
         role=body.role,
-        department_id=body.department_id,
+        department_id=primary_dept_id,
         roster_id=None,
         is_active=True,
         must_change_password=must_change_pw,
@@ -673,6 +706,14 @@ def create_staff_user(
     )
     db.add(user)
     db.flush()
+
+    for d in depts:
+        db.add(UserDepartment(
+            user_id=user.id,
+            department_id=d.id,
+            created_at=now,
+            created_by_user_id=current_user.id,
+        ))
 
     _record_admin_audit(
         db,
@@ -684,10 +725,16 @@ def create_staff_user(
             "email": user.email,
             "role": user.role.value,
             "department_id": user.department_id,
+            "department_ids": [d.id for d in depts],
         },
     )
     db.commit()
     db.refresh(user)
+
+    dept_briefs = [
+        DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value)
+        for d in depts
+    ]
 
     return AdminUserResponse(
         id=user.id,
@@ -695,10 +742,12 @@ def create_staff_user(
         full_name=user.full_name,
         role=user.role.value,
         department_id=user.department_id,
-        department_name=dept.name if dept else None,
+        department_name=primary_dept.name if primary_dept else None,
+        departments=dept_briefs,
         is_active=user.is_active,
         temporary_password=temp_password,
     )
+
 
 
 @router.post(
@@ -747,6 +796,225 @@ def reset_user_password(
         email=user.email,
         temporary_password=temp_password,
     )
+
+
+@router.get(
+    "/users/{id}",
+    response_model=AdminUserDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="get_admin_user_detail",
+    summary="Get User Details",
+    description="Retrieves full user detail including all department memberships.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "User not found"},
+    },
+)
+def get_admin_user_detail(
+    id: int,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AdminUserDetailResponse:
+    user = db.get(User, id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    depts = get_user_departments(user, db)
+    dept_briefs = [
+        DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value)
+        for d in depts
+    ]
+    primary_dept = db.get(Department, user.department_id) if user.department_id else None
+
+    return AdminUserDetailResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        department_id=user.department_id,
+        department_name=primary_dept.name if primary_dept else None,
+        departments=dept_briefs,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
+
+
+@router.post(
+    "/users/{id}/departments",
+    response_model=AdminUserDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="add_user_department_membership",
+    summary="Add Department Membership to User",
+    description="Adds a department membership to a user account. HoD accounts must remain academic-only. Audited.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Department not found or non-academic for HoD"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "User not found"},
+    },
+)
+def add_user_department(
+    id: int,
+    body: AddUserDepartmentRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AdminUserDetailResponse:
+    user = db.get(User, id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if user.role in (UserRole.admin, UserRole.student):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot add department memberships to {user.role.value} role.",
+        )
+
+    dept = db.get(Department, body.department_id)
+    if not dept:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Department ID {body.department_id} not found")
+
+    if user.role == UserRole.hod and dept.kind != DepartmentKind.academic:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Chairperson (HoD) user must belong exclusively to academic departments. '{dept.name}' is a service department.",
+        )
+
+    # Check if membership already exists
+    existing = db.execute(
+        select(UserDepartment).where(
+            UserDepartment.user_id == user.id,
+            UserDepartment.department_id == dept.id,
+        )
+    ).scalars().first()
+
+    if not existing:
+        now = datetime.now(timezone.utc)
+        ud = UserDepartment(
+            user_id=user.id,
+            department_id=dept.id,
+            created_at=now,
+            created_by_user_id=current_user.id,
+        )
+        db.add(ud)
+        if user.department_id is None:
+            user.department_id = dept.id
+
+        _record_admin_audit(
+            db,
+            current_user.id,
+            action="ADD_USER_DEPARTMENT",
+            entity_type="users",
+            entity_id=user.id,
+            details={"department_id": dept.id, "department_name": dept.name},
+        )
+        db.commit()
+        db.refresh(user)
+
+    depts = get_user_departments(user, db)
+    dept_briefs = [DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value) for d in depts]
+    primary_dept = db.get(Department, user.department_id) if user.department_id else None
+
+    return AdminUserDetailResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        department_id=user.department_id,
+        department_name=primary_dept.name if primary_dept else None,
+        departments=dept_briefs,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
+
+
+@router.delete(
+    "/users/{id}/departments/{department_id}",
+    response_model=AdminUserDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="remove_user_department_membership",
+    summary="Remove Department Membership from User",
+    description="Removes a department membership from a user. Refuses removing the last department of a dept_officer or hod (409). Promotes another department to primary if primary is removed. Audited.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "User or department membership not found"},
+        409: {"model": ErrorResponse, "description": "Cannot remove last department; deactivate the user instead"},
+    },
+)
+def remove_user_department(
+    id: int,
+    department_id: int,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AdminUserDetailResponse:
+    user = db.get(User, id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    membership = db.execute(
+        select(UserDepartment).where(
+            UserDepartment.user_id == user.id,
+            UserDepartment.department_id == department_id,
+        )
+    ).scalars().first()
+
+    all_memberships = db.execute(
+        select(UserDepartment).where(UserDepartment.user_id == user.id)
+    ).scalars().all()
+    all_dept_ids = {m.department_id for m in all_memberships}
+    if user.department_id is not None:
+        all_dept_ids.add(user.department_id)
+
+    if department_id not in all_dept_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Department membership not found for this user.",
+        )
+
+    if user.role in (UserRole.dept_officer, UserRole.hod) and len(all_dept_ids) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Deactivate the user instead",
+        )
+
+    if membership:
+        db.delete(membership)
+
+    remaining_dept_ids = all_dept_ids - {department_id}
+    if user.department_id == department_id:
+        user.department_id = sorted(list(remaining_dept_ids))[0] if remaining_dept_ids else None
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="REMOVE_USER_DEPARTMENT",
+        entity_type="users",
+        entity_id=user.id,
+        details={
+            "removed_department_id": department_id,
+            "new_primary_department_id": user.department_id,
+        },
+    )
+    db.commit()
+    db.refresh(user)
+
+    depts = get_user_departments(user, db)
+    dept_briefs = [DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value) for d in depts]
+    primary_dept = db.get(Department, user.department_id) if user.department_id else None
+
+    return AdminUserDetailResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        department_id=user.department_id,
+        department_name=primary_dept.name if primary_dept else None,
+        departments=dept_briefs,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
+
 
 
 @router.patch(
@@ -841,7 +1109,16 @@ def list_admin_users(
         stmt = stmt.where(User.role == role)
 
     if department_id is not None:
-        stmt = stmt.where(User.department_id == department_id)
+        stmt = (
+            stmt.outerjoin(UserDepartment, UserDepartment.user_id == User.id)
+            .where(
+                or_(
+                    User.department_id == department_id,
+                    UserDepartment.department_id == department_id,
+                )
+            )
+            .distinct()
+        )
 
     if is_active is not None:
         stmt = stmt.where(User.is_active == is_active)
@@ -858,20 +1135,29 @@ def list_admin_users(
     stmt = stmt.offset(offset).limit(limit)
     users = db.execute(stmt).scalars().all()
 
-    return [
-        AdminUserListItem(
-            id=u.id,
-            email=u.email,
-            full_name=u.full_name,
-            role=u.role.value,
-            department=u.department.name if u.department else None,
-            department_name=u.department.name if u.department else None,
-            department_id=u.department_id,
-            is_active=u.is_active,
-            created_at=u.created_at,
+    items = []
+    for u in users:
+        u_depts = get_user_departments(u, db)
+        dept_briefs = [
+            DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value)
+            for d in u_depts
+        ]
+        items.append(
+            AdminUserListItem(
+                id=u.id,
+                email=u.email,
+                full_name=u.full_name,
+                role=u.role.value,
+                department=u.department.name if u.department else None,
+                department_name=u.department.name if u.department else None,
+                department_id=u.department_id,
+                departments=dept_briefs,
+                is_active=u.is_active,
+                created_at=u.created_at,
+            )
         )
-        for u in users
-    ]
+
+    return items
 
 
 @router.get(
@@ -891,23 +1177,18 @@ def list_admin_offices(
 ) -> AdminOfficeListResponse:
     depts = db.execute(
         select(Department)
-        .options(joinedload(Department.users))
         .order_by(Department.id.asc())
     ).unique().scalars().all()
 
     office_items: list[AdminOfficeSummary] = []
     for d in depts:
+        officers = active_officers_for(db, d.id)
         active_officers = [
             AdminOfficeUserSummary(id=u.id, name=u.full_name, email=u.email)
-            for u in d.users
-            if u.role == UserRole.dept_officer and u.is_active
+            for u in officers
         ]
-        hod_user = next(
-            (AdminOfficeUserSummary(id=u.id, name=u.full_name, email=u.email)
-             for u in d.users
-             if u.role == UserRole.hod and u.is_active),
-            None,
-        )
+        hod = active_hod_for(db, d.id) if d.kind == DepartmentKind.academic else None
+        hod_user = AdminOfficeUserSummary(id=hod.id, name=hod.full_name, email=hod.email) if hod else None
         missing_officer = (len(active_officers) == 0)
         missing_hod = (d.kind == DepartmentKind.academic and hod_user is None)
 
@@ -929,6 +1210,7 @@ def list_admin_offices(
         total=len(office_items),
         items=office_items,
     )
+
 
 
 @router.post(
@@ -963,13 +1245,18 @@ async def bulk_upload_admin_users(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file is empty or missing headers")
 
     fieldnames_map = {f.strip().lower(): f for f in reader.fieldnames if f}
-    required_cols = ["email", "full_name", "role", "department"]
+    required_cols = ["email", "full_name", "role"]
     for col in required_cols:
         if col not in fieldnames_map:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Missing required CSV column '{col}'. Required: {', '.join(required_cols)}",
             )
+    if "department" not in fieldnames_map and "departments" not in fieldnames_map:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing required CSV column 'department' or 'departments'.",
+        )
 
     all_depts = db.execute(select(Department)).scalars().all()
     dept_by_name = {d.name.strip().lower(): d for d in all_depts}
@@ -984,7 +1271,6 @@ async def bulk_upload_admin_users(
         email = normalize_email(raw_email) if raw_email else ""
         full_name = (row.get(fieldnames_map["full_name"]) or "").strip()
         role_str = (row.get(fieldnames_map["role"]) or "").strip().lower()
-        dept_str = (row.get(fieldnames_map["department"]) or "").strip()
 
         if not email or not full_name:
             row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email or "UNKNOWN", status="rejected", reason="Email and full_name are mandatory"))
@@ -1014,21 +1300,56 @@ async def bulk_upload_admin_users(
             rejected_count += 1
             continue
 
-        matched_dept = None
-        if dept_str:
-            matched_dept = dept_by_name.get(dept_str.lower())
-            if not matched_dept and dept_str.isdigit():
-                matched_dept = dept_by_id.get(int(dept_str))
+        matched_depts: list[Department] = []
+        has_dept_error = False
 
-        if role in (UserRole.dept_officer, UserRole.hod):
-            if not matched_dept:
+        if "departments" in fieldnames_map and (row.get(fieldnames_map["departments"]) or "").strip():
+            raw_depts = [part.strip() for part in (row.get(fieldnames_map["departments"]) or "").split("|") if part.strip()]
+            for part in raw_depts:
+                m_dept = dept_by_name.get(part.lower())
+                if not m_dept and part.isdigit():
+                    m_dept = dept_by_id.get(int(part))
+                if not m_dept:
+                    row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Department '{part}' not found"))
+                    rejected_count += 1
+                    has_dept_error = True
+                    break
+                matched_depts.append(m_dept)
+        elif "department" in fieldnames_map and (row.get(fieldnames_map["department"]) or "").strip():
+            dept_str = (row.get(fieldnames_map["department"]) or "").strip()
+            m_dept = dept_by_name.get(dept_str.lower())
+            if not m_dept and dept_str.isdigit():
+                m_dept = dept_by_id.get(int(dept_str))
+            if not m_dept:
                 row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Department '{dept_str}' not found (mandatory for {role.value})"))
                 rejected_count += 1
+                has_dept_error = True
+            else:
+                matched_depts.append(m_dept)
+
+        if has_dept_error:
+            continue
+
+        if role in (UserRole.dept_officer, UserRole.hod):
+            if not matched_depts:
+                row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason=f"Department is mandatory for {role.value}"))
+                rejected_count += 1
                 continue
-            if role == UserRole.hod and matched_dept.kind != DepartmentKind.academic:
+            if role == UserRole.hod and any(d.kind != DepartmentKind.academic for d in matched_depts):
                 row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason="HoD must belong to an academic department"))
                 rejected_count += 1
                 continue
+        elif role == UserRole.registrar_accounts:
+            rs_dept = db.execute(
+                select(Department).where(func.lower(Department.name).in_(["r&s branch", "registration & scholarship branch"]))
+            ).scalars().first()
+            if matched_depts:
+                if rs_dept and any(d.id != rs_dept.id for d in matched_depts):
+                    row_reports.append(AdminUserBulkUploadDetail(row_number=idx, email=email, status="rejected", reason="registrar_accounts must belong to R&S Branch"))
+                    rejected_count += 1
+                    continue
+            elif rs_dept:
+                matched_depts = [rs_dept]
 
         # Check existing user
         exists_user = db.execute(select(User).where(func.lower(User.email) == email)).scalars().first()
@@ -1060,12 +1381,21 @@ async def bulk_upload_admin_users(
             full_name=full_name,
             password_hash=hashed_pw,
             role=role,
-            department_id=matched_dept.id if matched_dept else None,
+            department_id=matched_depts[0].id if matched_depts else None,
             is_active=True,
             must_change_password=must_change,
         )
         db.add(new_user)
         db.flush()
+
+        now = datetime.now(timezone.utc)
+        for d in matched_depts:
+            db.add(UserDepartment(
+                user_id=new_user.id,
+                department_id=d.id,
+                created_at=now,
+                created_by_user_id=current_user.id,
+            ))
 
         # Audit log does NOT store temporary password
         _record_admin_audit(
@@ -1074,7 +1404,12 @@ async def bulk_upload_admin_users(
             action="CREATE_USER_BULK",
             entity_type="users",
             entity_id=new_user.id,
-            details={"email": new_user.email, "role": new_user.role.value, "department_id": new_user.department_id},
+            details={
+                "email": new_user.email,
+                "role": new_user.role.value,
+                "department_id": new_user.department_id,
+                "department_ids": [d.id for d in matched_depts],
+            },
         )
 
         row_reports.append(
@@ -1086,6 +1421,7 @@ async def bulk_upload_admin_users(
             )
         )
         created_count += 1
+
 
     db.commit()
 

@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import requests
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, or_
 
 from backend.app.core.config import settings
 from backend.app.core.database import SessionLocal
 from backend.app.models.email import EmailOutbox, OutboxStatus
-from backend.app.models.user import User, UserRole
+from backend.app.models.user import User, UserRole, UserDepartment
 from backend.app.models.clearance import ClearanceRequest, DepartmentApproval
 from backend.app.models.university import Department
 
@@ -281,14 +281,8 @@ def send_otp_email(
 
 
 def notify_officers_new_request(session: Session, request: ClearanceRequest) -> None:
-    """Queues 1 email per active officer of each department on the new clearance request."""
-    subject = "SVSU No-Dues Clearance: New Request Awaiting Review"
+    """Queues at most 1 email per active officer across all their assigned offices on this request."""
     url = f"{settings.FRONTEND_BASE_URL}/department/queue"
-    body = (
-        f"A new student no-dues clearance request has been submitted and is awaiting your department's review.\n\n"
-        f"Please log in to review the pending queue:\n{url}\n\n"
-        f"Regards,\nSVSU No-Dues Clearance Team"
-    )
 
     dept_ids = [
         row[0]
@@ -301,23 +295,50 @@ def notify_officers_new_request(session: Session, request: ClearanceRequest) -> 
     if not dept_ids:
         return
 
-    officers = session.execute(
-        select(User).where(
-            User.role == UserRole.dept_officer,
-            User.department_id.in_(dept_ids),
-            User.is_active == True,
-        )
+    depts = session.execute(
+        select(Department).where(Department.id.in_(dept_ids))
     ).scalars().all()
+    dept_name_map = {d.id: d.name for d in depts}
 
-    for officer in officers:
+    officer_rows = session.execute(
+        select(User, UserDepartment.department_id)
+        .outerjoin(UserDepartment, UserDepartment.user_id == User.id)
+        .where(
+            User.role == UserRole.dept_officer,
+            User.is_active == True,
+            or_(
+                User.department_id.in_(dept_ids),
+                UserDepartment.department_id.in_(dept_ids),
+            ),
+        )
+    ).all()
+
+    officer_offices: dict[int, tuple[User, set[str]]] = {}
+    for user, ud_dept_id in officer_rows:
+        if user.id not in officer_offices:
+            officer_offices[user.id] = (user, set())
+        if user.department_id in dept_ids and user.department_id in dept_name_map:
+            officer_offices[user.id][1].add(dept_name_map[user.department_id])
+        if ud_dept_id in dept_ids and ud_dept_id in dept_name_map:
+            officer_offices[user.id][1].add(dept_name_map[ud_dept_id])
+
+    for user_id, (officer, offices) in officer_offices.items():
+        offices_list = sorted(list(offices))
+        offices_str = ", ".join(offices_list) if offices_list else "your department"
+        body = (
+            f"A new student no-dues clearance request has been submitted and is awaiting your review for: {offices_str}.\n\n"
+            f"Please log in to review the pending queue:\n{url}\n\n"
+            f"Regards,\nSVSU No-Dues Clearance Team"
+        )
         queue_email(
             session=session,
             to_email=officer.email,
-            subject=subject,
+            subject="SVSU No-Dues Clearance: New Request Awaiting Review",
             body=body,
             kind="request_submitted",
             related_request_id=request.id,
         )
+
 
 
 def notify_student_rejection(
@@ -359,12 +380,19 @@ def notify_hod_all_approved(session: Session, request: ClearanceRequest) -> None
         return
 
     hod = session.execute(
-        select(User).where(
+        select(User)
+        .outerjoin(UserDepartment, UserDepartment.user_id == User.id)
+        .where(
             User.role == UserRole.hod,
-            User.department_id == academic_dept_id,
             User.is_active == True,
+            or_(
+                User.department_id == academic_dept_id,
+                UserDepartment.department_id == academic_dept_id,
+            ),
         )
+        .distinct()
     ).scalars().first()
+
 
     if not hod:
         return
@@ -517,12 +545,19 @@ def notify_department_added(
     """Queues notification to officers of the added department and notice to student."""
     # Notify officers of added office
     officers = session.execute(
-        select(User).where(
+        select(User)
+        .outerjoin(UserDepartment, UserDepartment.user_id == User.id)
+        .where(
             User.role == UserRole.dept_officer,
-            User.department_id == department.id,
             User.is_active == True,
+            or_(
+                User.department_id == department.id,
+                UserDepartment.department_id == department.id,
+            ),
         )
+        .distinct()
     ).scalars().all()
+
 
     dept_url = f"{settings.FRONTEND_BASE_URL}/department/queue"
     for officer in officers:

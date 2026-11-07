@@ -49,6 +49,9 @@ import {
   FileText,
   Info,
   XCircle,
+  CheckCircle2,
+  RotateCw,
+  ShieldCheck,
 } from 'lucide-react'
 
 export function OfficerRequestDetailPage() {
@@ -68,6 +71,13 @@ export function OfficerRequestDetailPage() {
   const [cancelReason, setCancelReason] = useState('')
   const [cancelReasonError, setCancelReasonError] = useState('')
 
+  // Officer Decision Dialog State
+  const [decisionModalOpen, setDecisionModalOpen] = useState(false)
+  const [selectedApproval, setSelectedApproval] = useState(null)
+  const [decisionAction, setDecisionAction] = useState('APPROVED')
+  const [decisionRemarks, setDecisionRemarks] = useState('')
+  const [decisionRemarksError, setDecisionRemarksError] = useState('')
+
   // Fetch full academic dossier
   const {
     data: detail,
@@ -79,6 +89,57 @@ export function OfficerRequestDetailPage() {
     queryFn: () => departmentApi.getRequestDetail(Number(id)),
     enabled: Boolean(id),
   })
+
+  // Submit Decision Mutation
+  const decisionMutation = useMutation({
+    mutationFn: ({ approvalId, decision, remarks }) =>
+      departmentApi.submitDecision(approvalId, { decision, remarks }),
+    onSuccess: (_, variables) => {
+      toast.success(
+        variables.decision === 'APPROVED'
+          ? `Cleared dues for ${selectedApproval?.department_name || 'department'}.`
+          : `Recorded rejection with remarks for ${selectedApproval?.department_name || 'department'}.`
+      )
+      setDecisionModalOpen(false)
+      setSelectedApproval(null)
+      queryClient.invalidateQueries({ queryKey: ['department', 'request', id] })
+      queryClient.invalidateQueries({ queryKey: ['department', 'queue'] })
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.detail || 'Failed to submit clearance decision.'
+      setDecisionRemarksError(msg)
+      toast.error(msg)
+    },
+  })
+
+  const openDecisionModal = (approval, defaultDecision = 'APPROVED') => {
+    setSelectedApproval(approval)
+    setDecisionAction(defaultDecision)
+    setDecisionRemarks('')
+    setDecisionRemarksError('')
+    setDecisionModalOpen(true)
+  }
+
+  const handleDecisionSubmit = (e) => {
+    e.preventDefault()
+    if (!selectedApproval) return
+
+    if (decisionAction === 'REJECTED' && !decisionRemarks.trim()) {
+      setDecisionRemarksError('Remarks are strictly mandatory when rejecting an application.')
+      return
+    }
+
+    if (decisionRemarks.length > 500) {
+      setDecisionRemarksError('Remarks cannot exceed 500 characters.')
+      return
+    }
+
+    decisionMutation.mutate({
+      approvalId: selectedApproval.id,
+      decision: decisionAction,
+      remarks: decisionRemarks.trim() || null,
+    })
+  }
 
   // Cancel Request Mutation
   const cancelMutation = useMutation({
@@ -185,6 +246,13 @@ export function OfficerRequestDetailPage() {
     detail.status !== 'CLEARED' &&
     detail.status !== 'REFUND_VERIFIED' &&
     detail.status !== 'CANCELLED'
+
+  const userDepts = user?.departments || []
+  const officerDeptIds = new Set(userDepts.map((d) => d.id))
+  if (officerDeptIds.size === 0 && user?.department_id) {
+    officerDeptIds.add(user.department_id)
+  }
+  const myApprovals = approvals.filter((a) => officerDeptIds.has(a.department_id))
 
   return (
     <AppShell>
@@ -334,6 +402,165 @@ export function OfficerRequestDetailPage() {
             <p className="leading-relaxed pl-5 font-mono text-[11px]">
               "{detail.hod_remarks}"
             </p>
+          </div>
+        )}
+
+        {/* Assigned Office Reviews (one section per office when officer has offices on this request) */}
+        {myApprovals.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="font-heading text-base sm:text-lg font-bold text-zinc-950">
+                  {myApprovals.length > 1
+                    ? `My Assigned Offices Review (${myApprovals.length} Offices)`
+                    : 'My Department Clearance Review'}
+                </h2>
+                <p className="text-xs text-zinc-500">
+                  {myApprovals.length > 1
+                    ? 'You are assigned to multiple offices on this clearance request. Review and record decisions for each office independently.'
+                    : 'Record your departmental clearance decision below.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              {myApprovals.map((app) => (
+                <div
+                  key={app.id}
+                  className="rounded-xl border border-border bg-white shadow-card p-5 space-y-4"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-100 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center text-zinc-800">
+                        <Building2 className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-heading font-bold text-sm text-zinc-950">
+                            {app.department_name}
+                          </span>
+                          <Badge variant="outline" className="text-[10px] uppercase font-mono bg-zinc-50">
+                            {app.department_kind}
+                          </Badge>
+                        </div>
+                        {app.resubmission_count > 0 && (
+                          <span className="text-[10px] text-amber-700 font-mono">
+                            Resubmitted #{app.resubmission_count}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <StatusBadge status={app.status} size="sm" />
+                      {app.status === 'PENDING' ? (
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            size="sm"
+                            onClick={() => openDecisionModal(app, 'APPROVED')}
+                            className="h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => openDecisionModal(app, 'REJECTED')}
+                            className="h-8 px-3 text-xs border-rose-200 text-rose-700 hover:bg-rose-50 gap-1"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            Reject
+                          </Button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-zinc-500 italic">
+                          Decided by {app.decided_by_name || 'Officer'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                    {/* Relevant Declared Subjects */}
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-semibold text-zinc-700 block">
+                        Relevant Declared Laboratory Subjects:
+                      </span>
+                      {detail.declared_subjects && detail.declared_subjects.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {detail.declared_subjects.map((sub, i) => (
+                            <Badge
+                              key={i}
+                              variant="outline"
+                              className="font-mono text-[10px] bg-zinc-50 border-zinc-200 text-zinc-800"
+                            >
+                              {sub}
+                            </Badge>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-zinc-400 italic">No specific lab subjects declared</span>
+                      )}
+                    </div>
+
+                    {/* Hostel Declaration */}
+                    <div className="space-y-1">
+                      <span className="text-[11px] font-semibold text-zinc-700 block">
+                        Hostel Residency Declaration:
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] font-medium ${
+                            detail.declared_is_hosteller
+                              ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                              : 'bg-zinc-50 text-zinc-700 border-zinc-200'
+                          }`}
+                        >
+                          {detail.declared_is_hosteller !== null && detail.declared_is_hosteller !== undefined
+                            ? (detail.declared_is_hosteller ? 'Hosteller (Yes)' : 'Day Scholar (No)')
+                            : 'Not declared'}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Student Declaration Note if present */}
+                  {detail.others_note && (
+                    <div className="p-2.5 rounded-lg bg-zinc-50 border border-zinc-200 text-xs">
+                      <span className="font-semibold text-zinc-700 block mb-0.5 text-[11px]">
+                        Student Declaration Note:
+                      </span>
+                      <p className="text-zinc-600 font-mono text-[11px] leading-relaxed">
+                        {detail.others_note}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Previous / Current Remarks */}
+                  {app.remarks && (
+                    <div className="p-2.5 rounded-lg bg-zinc-50 border border-zinc-200 text-xs">
+                      <span className="font-semibold text-zinc-700 block mb-0.5 text-[11px]">
+                        Recorded Remarks:
+                      </span>
+                      <p className={`text-xs ${app.status === 'REJECTED' ? 'text-rose-900 font-medium' : 'text-zinc-700'}`}>
+                        {app.remarks}
+                      </p>
+                    </div>
+                  )}
+
+                  {app.previous_remarks && (
+                    <div className="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200 text-xs text-amber-950">
+                      <span className="font-semibold block mb-0.5 text-[11px]">
+                        Previous Rejection Reason:
+                      </span>
+                      <p className="font-mono text-[11px]">{app.previous_remarks}</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 
@@ -600,6 +827,149 @@ export function OfficerRequestDetailPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Officer Decision Dialog */}
+      <Dialog open={decisionModalOpen} onOpenChange={setDecisionModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white border-border">
+          <form onSubmit={handleDecisionSubmit}>
+            <DialogHeader>
+              <DialogTitle className="font-heading text-lg font-bold text-zinc-950">
+                Department Clearance Review
+              </DialogTitle>
+              <DialogDescription className="text-xs text-zinc-500">
+                Record your clearance decision for this student application.
+              </DialogDescription>
+            </DialogHeader>
+
+            {selectedApproval && (
+              <div className="space-y-4 py-3 text-xs">
+                {/* Office Target Banner */}
+                <div className="p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200 text-xs flex items-center justify-between">
+                  <span className="text-indigo-900 font-medium text-[11px]">Deciding for:</span>
+                  <span className="font-bold text-indigo-950 text-xs">
+                    {selectedApproval.department_name}
+                  </span>
+                </div>
+
+                {/* Decision Selection: Approve vs Reject */}
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-zinc-900">
+                    Decision Action
+                  </Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDecisionAction('APPROVED')
+                        setDecisionRemarksError('')
+                      }}
+                      className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-semibold transition-all ${
+                        decisionAction === 'APPROVED'
+                          ? 'border-emerald-600 bg-emerald-50/50 text-emerald-950 ring-1 ring-emerald-600'
+                          : 'border-border bg-white text-zinc-600 hover:bg-zinc-50'
+                      }`}
+                    >
+                      <CheckCircle2 className={`w-4 h-4 ${decisionAction === 'APPROVED' ? 'text-emerald-600' : 'text-zinc-400'}`} />
+                      Approve Clearance
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDecisionAction('REJECTED')
+                      }}
+                      className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-semibold transition-all ${
+                        decisionAction === 'REJECTED'
+                          ? 'border-rose-600 bg-rose-50/50 text-rose-950 ring-1 ring-rose-600'
+                          : 'border-border bg-white text-zinc-600 hover:bg-zinc-50'
+                      }`}
+                    >
+                      <XCircle className={`w-4 h-4 ${decisionAction === 'REJECTED' ? 'text-rose-600' : 'text-zinc-400'}`} />
+                      Reject with Remarks
+                    </button>
+                  </div>
+                </div>
+
+                {/* Remarks Field */}
+                <div className="space-y-1.5">
+                  <div className="flex justify-between items-center text-xs">
+                    <Label htmlFor="officer-decision-remarks" className="font-semibold text-zinc-900">
+                      {decisionAction === 'REJECTED' ? (
+                        <span className="text-rose-700">Rejection Remarks (Mandatory) *</span>
+                      ) : (
+                        <span>Officer Remarks (Optional)</span>
+                      )}
+                    </Label>
+                    <span className={`text-[11px] font-mono ${decisionRemarks.length > 500 ? 'text-rose-600 font-bold' : 'text-zinc-400'}`}>
+                      {decisionRemarks.length} / 500
+                    </span>
+                  </div>
+
+                  <Textarea
+                    id="officer-decision-remarks"
+                    rows={3}
+                    placeholder={
+                      decisionAction === 'REJECTED'
+                        ? 'Specify outstanding dues, missing equipment, fine amounts, or items to return...'
+                        : 'Optional verification notes (e.g. All books returned and dues cleared).'
+                    }
+                    value={decisionRemarks}
+                    onChange={(e) => {
+                      setDecisionRemarks(e.target.value)
+                      if (decisionRemarksError) setDecisionRemarksError('')
+                    }}
+                    className={`text-xs bg-white resize-none ${decisionRemarksError ? 'border-rose-500 focus-visible:ring-rose-500' : 'border-border'}`}
+                  />
+                  {decisionRemarksError && (
+                    <p className="text-[11px] text-rose-600 font-medium">{decisionRemarksError}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-3 border-t border-border">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setDecisionModalOpen(false)}
+                disabled={decisionMutation.isPending}
+                className="text-xs h-9 border-border hover:bg-zinc-100"
+              >
+                Cancel
+              </Button>
+
+              <Button
+                type="submit"
+                size="sm"
+                disabled={decisionMutation.isPending}
+                className={`text-xs h-9 gap-1.5 text-white ${
+                  decisionAction === 'APPROVED'
+                    ? 'bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-emerald-600'
+                    : 'bg-rose-600 hover:bg-rose-700 focus-visible:ring-rose-600'
+                }`}
+              >
+                {decisionMutation.isPending ? (
+                  <>
+                    <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                    Recording...
+                  </>
+                ) : decisionAction === 'APPROVED' ? (
+                  <>
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Confirm Approval
+                  </>
+                ) : (
+                  <>
+                    <XCircle className="w-3.5 h-3.5" />
+                    Confirm Rejection
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   )
 }

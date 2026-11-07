@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-from sqlalchemy import select, delete, update, func, not_
+from sqlalchemy import select, delete, update, func, not_, text
+
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from backend.app.core.config import settings
@@ -313,7 +314,21 @@ def remove_demo_students(session, yes: bool = False, i_know_real_data_exists: bo
     else:
         counts["student_roster"] = 0
 
+    # Sync user_departments
+    session.execute(
+        text(
+            """
+            INSERT INTO user_departments (user_id, department_id, created_at)
+            SELECT id, department_id, created_at
+            FROM users
+            WHERE department_id IS NOT NULL
+            ON CONFLICT (user_id, department_id) DO NOTHING
+            """
+        )
+    )
+
     session.commit()
+
 
     print("Deleted rows per table:")
     for tbl, cnt in counts.items():
@@ -355,7 +370,21 @@ def migrate_staff_domain(session, staff_domain: str) -> tuple[list[str], list[tu
             renamed_emails.append(new_email)
             print(f"  Renamed: {old_email} -> {new_email}")
 
+    # Sync user_departments
+    session.execute(
+        text(
+            """
+            INSERT INTO user_departments (user_id, department_id, created_at)
+            SELECT id, department_id, created_at
+            FROM users
+            WHERE department_id IS NOT NULL
+            ON CONFLICT (user_id, department_id) DO NOTHING
+            """
+        )
+    )
+
     session.commit()
+
     print(f"Migration complete: {len(renamed_emails)} account(s) renamed, {len(collisions)} collision(s) skipped.")
     return renamed_emails, collisions
 
@@ -398,7 +427,21 @@ def reset_data(session, i_know_real_data_exists: bool = False) -> None:
     else:
         print("Real student roster rows present; preserving programmes, departments, and faculties.")
 
+    # Sync user_departments
+    session.execute(
+        text(
+            """
+            INSERT INTO user_departments (user_id, department_id, created_at)
+            SELECT id, department_id, created_at
+            FROM users
+            WHERE department_id IS NOT NULL
+            ON CONFLICT (user_id, department_id) DO NOTHING
+            """
+        )
+    )
+
     session.commit()
+
     print("Reset complete.")
 
 
@@ -528,7 +571,21 @@ def seed(session, staff_domain: str) -> list[str]:
         })
         staff_emails_created.append(hod_email)
 
+    # Sync user_departments
+    session.execute(
+        text(
+            """
+            INSERT INTO user_departments (user_id, department_id, created_at)
+            SELECT id, department_id, created_at
+            FROM users
+            WHERE department_id IS NOT NULL
+            ON CONFLICT (user_id, department_id) DO NOTHING
+            """
+        )
+    )
+
     session.commit()
+
     print("Seed complete. (Zero student records created).")
     return staff_emails_created
 

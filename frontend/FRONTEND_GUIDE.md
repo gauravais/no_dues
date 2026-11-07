@@ -433,6 +433,42 @@ Content-Security-Policy:
   2. `npm run check:wording`: Scans all files in `src/` and `index.html` for forbidden terms (`demo`, `FastAPI`, `Tailwind`, `shadcn`, `React 19`, `synthetic`), allowing exemptions only when explicitly annotated with `wording-ok`.
   3. `npm run check:contract`: Verifies 100% frontend API client alignment against the OpenAPI contract.
 
+---
+
+## 11. Multi-Office Membership Architecture
+
+The frontend fully supports the additive multi-department membership model where a single staff account (one email, one identity) can be assigned to multiple university offices or academic teaching departments:
+
+### A. Authentication & Shell Integration (`AppShell.jsx`)
+- **Profile Memberships**: `user.departments` provides an array of `{ id, name, kind }` representing all assigned university facilities.
+- **Office Chips in User Menu**: User dropdown and mobile sheet render badges for all assigned offices.
+- **Academic Role Guarding**: Roster and Lab Catalog navigation links are displayed **strictly if $\ge 1$ membership is `academic`**. Pure service officers (e.g. Library and Sports only) never see roster or catalog links.
+
+### B. Officer Queue (`/officer`)
+- **Office Selector**: When an officer belongs to $>1$ office, an office selector pill bar appears with "All my offices" (displaying total pending dues across all offices from `office_counts`) alongside individual office buttons with their specific pending counts.
+- **Office Column**: An "Office" column is dynamically included in the desktop table and mobile card view.
+- **Decision Modal**: Prominently highlights `"Deciding for: <Office Name>"` to prevent decision confusion.
+- **Single Office Fidelity**: When the officer belongs to exactly one office, the interface preserves the standard single-department view.
+
+### C. Student Dossier Detail (`/officer/requests/:id`)
+- **Independent Per-Office Sections**: When several of the officer's assigned offices appear on a student's clearance application, the page renders a distinct card/section for each office.
+- **Office-Specific Context**: Each section independently surfaces the office status badge, relevant declared laboratory subjects, hostel residency declaration, student notes, and prior remarks.
+- **Independent Decision Controls**: Separate Approve and Reject actions are provided for each office, recording decisions independently via `departmentApi.submitDecision`.
+
+### D. Roster & Lab Catalog Scope Filtering
+- When an officer belongs to multiple academic departments, both `/officer/roster` and `/officer/lab-catalog` provide an academic department selector narrowing the query scope by passing `department_id` to the API.
+
+### E. Chairperson (HoD) Review Queue (`/hod`)
+- When an HoD chairs multiple academic departments, the queue provides a department filter dropdown and displays a "Department" column in the table and mobile cards.
+
+### F. Administrator Management (`/admin/users` & `/admin/offices`)
+- **Multi-Select Provisioning**: User creation form features multi-select checkboxes for departments (enforcing $\ge 1$ office for officers and strictly academic departments for HoDs).
+- **Directory Chips**: The staff directory table renders badges for each department assigned to a user.
+- **Offices Management Panel**: Administrators can view, add, and remove assigned offices per user. The last remaining department is protected from removal, instructing administrators to deactivate the user account instead.
+- **Bulk CSV Ingestion**: Downloadable template and parser support the `departments` column with pipe separation (e.g., `Library|Sports`).
+- **Staffing Dashboard (`/admin/offices`)**: Shows subtle badges next to staff names indicating other university offices they represent.
+
+
 
 
 

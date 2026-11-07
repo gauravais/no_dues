@@ -12,6 +12,7 @@ import {
   Mail,
   ShieldCheck,
   CheckCircle2,
+  Building2,
 } from 'lucide-react'
 
 export function HelpPage() {
@@ -202,6 +203,34 @@ export function HelpPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Department Staff & Multi-Office Guidance */}
+        <Card className="border-border bg-white shadow-card">
+          <CardHeader className="p-6 pb-3">
+            <div className="flex items-center gap-2.5">
+              <Building2 className="w-4 h-4 text-zinc-700" />
+              <CardTitle className="text-sm font-bold text-zinc-900">
+                Staff & Multi-Office Clearance Guidance
+              </CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="p-6 pt-0 text-xs text-zinc-600 leading-relaxed space-y-2">
+            <p>
+              University officers and Chairpersons (HoDs) may be designated to represent multiple offices simultaneously (for example, managing several laboratories, service branches, or academic departments).
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-zinc-600 pl-1">
+              <li>
+                <strong>Office Selector:</strong> Officers with multiple office assignments can switch between individual office queues or review all offices concurrently using the office selector in the department queue.
+              </li>
+              <li>
+                <strong>Dossier Reviews:</strong> When multiple assigned offices are attached to a student clearance application, the dossier provides dedicated decision sections for each office, allowing independent approvals or rejections with specific remarks.
+              </li>
+              <li>
+                <strong>Academic Scope:</strong> Access to the student roster and laboratory catalog is granted whenever an officer belongs to at least one academic department, with scope selectors available to narrow records by academic department.
+              </li>
+            </ul>
+          </CardContent>
+        </Card>
 
         {/* Technical Support / Contact Info */}
         {supportEmail && (

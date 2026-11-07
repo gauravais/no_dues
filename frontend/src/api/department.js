@@ -6,16 +6,20 @@ export const departmentApi = {
    * @param {Object} params
    * @param {string} [params.status] - PENDING | APPROVED | REJECTED
    * @param {string} [params.search] - Student name or registration number
+   * @param {number} [params.departmentId] - Optional department ID filter
    * @param {number} [params.limit=50]
    * @param {number} [params.offset=0]
    */
-  async getQueue({ status, search, limit = 50, offset = 0 } = {}) {
+  async getQueue({ status, search, departmentId, limit = 50, offset = 0 } = {}) {
     const params = { limit, offset }
     if (status) {
       params.status = status
     }
     if (search?.trim()) {
       params.search = search.trim()
+    }
+    if (departmentId !== undefined && departmentId !== null && departmentId !== 'ALL') {
+      params.department_id = Number(departmentId)
     }
     const response = await api.get('/department/queue', { params })
     return response.data
@@ -80,13 +84,17 @@ export const departmentApi = {
    * List student roster for the officer's academic department
    * @param {Object} params
    * @param {string} [params.search]
+   * @param {number} [params.departmentId]
    * @param {number} [params.limit=50]
    * @param {number} [params.offset=0]
    */
-  async getRoster({ search, limit = 50, offset = 0 } = {}) {
+  async getRoster({ search, departmentId, limit = 50, offset = 0 } = {}) {
     const params = { limit, offset }
     if (search?.trim()) {
       params.search = search.trim()
+    }
+    if (departmentId !== undefined && departmentId !== null && departmentId !== 'ALL') {
+      params.department_id = Number(departmentId)
     }
     const response = await api.get('/department/roster', { params })
     return response.data
@@ -153,13 +161,17 @@ export const departmentApi = {
    * List lab courses managed by the officer's academic department
    * @param {Object} params
    * @param {boolean} [params.is_active]
+   * @param {number} [params.departmentId]
    * @param {number} [params.limit=50]
    * @param {number} [params.offset=0]
    */
-  async getLabCourses({ is_active, limit = 50, offset = 0 } = {}) {
+  async getLabCourses({ is_active, departmentId, limit = 50, offset = 0 } = {}) {
     const params = { limit, offset }
     if (is_active !== undefined) {
       params.is_active = is_active
+    }
+    if (departmentId !== undefined && departmentId !== null && departmentId !== 'ALL') {
+      params.department_id = Number(departmentId)
     }
     const response = await api.get('/department/lab-courses', { params })
     return response.data
@@ -170,12 +182,16 @@ export const departmentApi = {
    * @param {Object} data
    */
   async createLabCourse(data) {
-    const response = await api.post('/department/lab-courses', {
+    const payload = {
       code: data.code.trim().toUpperCase(),
       name: data.name.trim(),
       lab_department_id: Number(data.lab_department_id),
       specialization: data.specialization?.trim() || null,
-    })
+    }
+    if (data.academic_department_id) {
+      payload.academic_department_id = Number(data.academic_department_id)
+    }
+    const response = await api.post('/department/lab-courses', payload)
     return response.data
   },
 

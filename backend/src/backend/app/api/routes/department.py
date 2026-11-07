@@ -32,6 +32,7 @@ from backend.app.models.audit import AuditLog
 from backend.app.schemas.workflow import (
     DepartmentQueueResponse,
     DepartmentQueueItem,
+    OfficePendingCount,
     DecisionRequest,
     DepartmentApprovalItem,
     AddOfficeRequest,
@@ -63,7 +64,14 @@ from backend.app.services.exceptions import (
     WorkflowBadRequestError,
     WorkflowForbiddenError,
 )
-from backend.app.services.workflow import decide_approval, add_office_to_request, staff_cancel_request
+from backend.app.services.workflow import (
+    decide_approval,
+    add_office_to_request,
+    staff_cancel_request,
+    user_department_ids,
+    user_academic_department_ids,
+    get_user_departments,
+)
 
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -117,31 +125,44 @@ def _format_lab_item(c: LabCourse) -> LabCourseItem:
     summary="Get Department Clearance Queue",
     description=(
         "Retrieves a paginated list of student clearance requests pending review or previously decided "
-        "by the officer's assigned department. Returns student identity and programme (never bank details)."
+        "by the officer's assigned departments. Returns student identity and programme (never bank details)."
     ),
     responses={
         400: {"model": ErrorResponse, "description": "Officer has no department assigned"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-officer roles"},
+        404: {"model": ErrorResponse, "description": "Department not found among officer's assigned departments"},
     },
 )
 def get_department_queue(
     db: SessionDep,
     current_user: User = Depends(require_officer),
+    department_id: int | None = Query(None, description="Filter queue to a specific assigned office"),
     approval_status: ApprovalStatus | None = Query(None, alias="status", description="Filter by approval status"),
     search: str | None = Query(None, description="Search by student name or registration number"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> DepartmentQueueResponse:
-    if not current_user.department_id:
+    officer_dept_ids = user_department_ids(current_user, db)
+    if not officer_dept_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Officer user is not associated with any department.",
         )
 
+    if department_id is not None:
+        if department_id not in officer_dept_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Department not found among officer's assigned departments.",
+            )
+        target_dept_ids = [department_id]
+    else:
+        target_dept_ids = list(officer_dept_ids)
+
     base_query = (
         select(DepartmentApproval)
         .where(
-            DepartmentApproval.department_id == current_user.department_id,
+            DepartmentApproval.department_id.in_(target_dept_ids),
             ClearanceRequest.status != ClearanceStatus.CANCELLED,
         )
         .join(ClearanceRequest, ClearanceRequest.id == DepartmentApproval.request_id)
@@ -165,6 +186,7 @@ def get_department_queue(
 
     items_query = (
         base_query.options(
+            joinedload(DepartmentApproval.department),
             joinedload(DepartmentApproval.request).joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.programme),
             joinedload(DepartmentApproval.request).selectinload(ClearanceRequest.declared_lab_courses),
         )
@@ -174,34 +196,65 @@ def get_department_queue(
     )
     approvals = db.execute(items_query).scalars().all()
 
-    officer_dept = db.get(Department, current_user.department_id)
-    is_hostel_office = (
-        officer_dept.applicability == DepartmentApplicability.HOSTELLER_ONLY
-        if officer_dept else False
+    # Pre-fetch officer departments for office counts and metadata
+    all_officer_depts = db.execute(
+        select(Department).where(Department.id.in_(officer_dept_ids)).order_by(Department.name.asc())
+    ).scalars().all()
+    dept_map = {d.id: d for d in all_officer_depts}
+
+    # Compute office_counts across ALL of the officer's departments
+    pending_counts_query = (
+        select(
+            DepartmentApproval.department_id,
+            func.count(DepartmentApproval.id).label("pending_count"),
+        )
+        .join(ClearanceRequest, ClearanceRequest.id == DepartmentApproval.request_id)
+        .where(
+            DepartmentApproval.department_id.in_(officer_dept_ids),
+            DepartmentApproval.status == ApprovalStatus.PENDING,
+            ClearanceRequest.status != ClearanceStatus.CANCELLED,
+        )
+        .group_by(DepartmentApproval.department_id)
     )
+    pending_counts = dict(db.execute(pending_counts_query).all())
+
+    office_counts = [
+        OfficePendingCount(
+            department_id=d.id,
+            department_name=d.name,
+            pending=pending_counts.get(d.id, 0),
+        )
+        for d in all_officer_depts
+    ]
 
     queue_items = []
     for a in approvals:
         req = a.request
         r = req.roster_entry if req else None
         prog_name = r.programme.name if (r and r.programme) else "Unknown"
+        d_obj = dept_map.get(a.department_id) or a.department
+        d_name = d_obj.name if d_obj else f"Department #{a.department_id}"
+
         declared_subs = [
             f"{c.code}: {c.name}" if c.code else c.name
             for c in (req.declared_lab_courses or [])
-            if c.lab_department_id == current_user.department_id
+            if c.lab_department_id == a.department_id
         ] if req else []
 
         # declared_is_hosteller: a bool, only for the officer's office if it is the hostel office, otherwise null
-        declared_hostel = bool(req.declared_is_hosteller) if (is_hostel_office and req) else None
+        is_hostel = (d_obj.applicability == DepartmentApplicability.HOSTELLER_ONLY) if d_obj else False
+        declared_hostel = bool(req.declared_is_hosteller) if (is_hostel and req) else None
 
         # others_note: only for offices that are on the request but not linked to any declared lab subject, otherwise null
         linked_dept_ids = {c.lab_department_id for c in (req.declared_lab_courses or [])} if req else set()
-        note = req.others_note if (req and current_user.department_id not in linked_dept_ids) else None
+        note = req.others_note if (req and a.department_id not in linked_dept_ids) else None
 
         queue_items.append(
             DepartmentQueueItem(
                 approval_id=a.id,
                 request_id=a.request_id,
+                department_id=a.department_id,
+                department_name=d_name,
                 student_name=r.name if r else "Unknown",
                 registration_number=r.registration_number if r else "Unknown",
                 programme_name=prog_name,
@@ -219,7 +272,9 @@ def get_department_queue(
         total=total,
         limit=limit,
         offset=offset,
+        office_counts=office_counts,
     )
+
 
 
 @router.post(
@@ -354,7 +409,8 @@ def get_department_request_detail(
     db: SessionDep,
     current_user: User = Depends(require_officer),
 ) -> AcademicRequestDetailResponse:
-    if not current_user.department_id:
+    officer_dept_ids = user_department_ids(current_user, db)
+    if not officer_dept_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Officer user is not associated with any department.",
@@ -387,14 +443,10 @@ def get_department_request_detail(
     acad_dept = db.get(Department, student_acad_dept_id) if student_acad_dept_id else None
     acad_dept_name = acad_dept.name if acad_dept else "Unknown Academic Department"
 
-    officer_dept = db.get(Department, current_user.department_id)
-    is_academic_officer = (
-        officer_dept.kind == DepartmentKind.academic
-        if officer_dept else False
-    )
+    officer_acad_dept_ids = user_academic_department_ids(current_user, db)
 
-    # 1. Full dossier for academic officer of the student's academic department
-    if is_academic_officer and student_acad_dept_id == current_user.department_id:
+    # 1. Full dossier for academic officer if one of their departments is the student's own academic department
+    if student_acad_dept_id and student_acad_dept_id in officer_acad_dept_ids:
         existing_dept_ids = {a.department_id for a in (req.approvals or [])}
         all_depts = db.execute(select(Department).order_by(Department.name.asc())).scalars().all()
         can_add = [
@@ -456,48 +508,55 @@ def get_department_request_detail(
         )
 
     # 2. Scoped / Limited dossier for any officer whose office is on the request
-    own_approval = next(
-        (a for a in (req.approvals or []) if a.department_id == current_user.department_id),
-        None,
-    )
-    if not own_approval:
+    own_approvals = [
+        a for a in (req.approvals or []) if a.department_id in officer_dept_ids
+    ]
+    if not own_approvals:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Clearance request not found for your department.",
         )
 
-    is_hostel_office = (
-        officer_dept.applicability == DepartmentApplicability.HOSTELLER_ONLY
-        if officer_dept else False
+    officer_depts = db.execute(
+        select(Department).where(Department.id.in_(officer_dept_ids))
+    ).scalars().all()
+
+    is_hostel_office = any(
+        d.applicability == DepartmentApplicability.HOSTELLER_ONLY
+        for d in officer_depts
     )
     hostel_decl = bool(req.declared_is_hosteller) if is_hostel_office else None
 
-    # declared subjects of their own office
+    # declared subjects of any of their offices
     own_subjects = [
         f"{c.code}: {c.name}" if c.code else c.name
         for c in (req.declared_lab_courses or [])
-        if c.lab_department_id == current_user.department_id
+        if c.lab_department_id in officer_dept_ids
     ]
 
-    # others_note if applicable (only if office not linked to any declared lab subject)
+    # others_note if applicable (only if any of officer's offices is not linked to any declared lab subject)
     linked_dept_ids = {c.lab_department_id for c in (req.declared_lab_courses or [])}
-    note = req.others_note if current_user.department_id not in linked_dept_ids else None
+    has_unlinked_office = any(did not in linked_dept_ids for did in officer_dept_ids)
+    note = req.others_note if has_unlinked_office else None
 
-    own_approval_item = DepartmentApprovalItem(
-        id=own_approval.id,
-        department_id=own_approval.department_id,
-        department_name=own_approval.department.name if own_approval.department else f"Department #{own_approval.department_id}",
-        department_kind=own_approval.department.kind.value if own_approval.department else "service",
-        status=own_approval.status,
-        remarks=own_approval.remarks,
-        previous_remarks=own_approval.previous_remarks,
-        decided_at=own_approval.decided_at,
-        decided_by_name=own_approval.decided_by_user.full_name or own_approval.decided_by_user.email if own_approval.decided_by_user else None,
-        resubmission_count=own_approval.resubmission_count,
-        added_by_user_id=own_approval.added_by_user_id,
-        added_by_name=own_approval.added_by_user.full_name or own_approval.added_by_user.email if own_approval.added_by_user else None,
-        added_reason=own_approval.added_reason,
-    )
+    own_approval_items = [
+        DepartmentApprovalItem(
+            id=a.id,
+            department_id=a.department_id,
+            department_name=a.department.name if a.department else f"Department #{a.department_id}",
+            department_kind=a.department.kind.value if a.department else "service",
+            status=a.status,
+            remarks=a.remarks,
+            previous_remarks=a.previous_remarks,
+            decided_at=a.decided_at,
+            decided_by_name=a.decided_by_user.full_name or a.decided_by_user.email if a.decided_by_user else None,
+            resubmission_count=a.resubmission_count,
+            added_by_user_id=a.added_by_user_id,
+            added_by_name=a.added_by_user.full_name or a.added_by_user.email if a.added_by_user else None,
+            added_reason=a.added_reason,
+        )
+        for a in own_approvals
+    ]
 
     return AcademicRequestDetailResponse(
         request_id=req.id,
@@ -513,9 +572,10 @@ def get_department_request_detail(
         submitted_at=req.submitted_at,
         hod_remarks=None,
         certificate_code=None,
-        approvals=[own_approval_item],
+        approvals=own_approval_items,
         can_add_departments=[],
     )
+
 
 
 @router.post(
@@ -624,12 +684,14 @@ async def upload_department_roster_csv(
                 detail=f"Missing required CSV column '{col}'. Required: {', '.join(required_cols)}",
             )
 
-    # Programmes belonging to THIS academic department only
+    # Programmes belonging to officer's academic departments
+    officer_acad_dept_ids = user_academic_department_ids(current_user, db)
     dept_progs = db.execute(
-        select(Programme).where(Programme.academic_department_id == current_user.department_id)
+        select(Programme).where(Programme.academic_department_id.in_(officer_acad_dept_ids))
     ).scalars().all()
     prog_by_name = {p.name.strip().lower(): p for p in dept_progs}
     prog_by_id = {p.id: p for p in dept_progs}
+
 
     row_reports: list[RosterUploadRowReport] = []
     created_count = 0
@@ -704,7 +766,7 @@ async def upload_department_roster_csv(
 
         if existing:
             # Foreign department student check
-            if existing.programme and existing.programme.academic_department_id != current_user.department_id:
+            if existing.programme and existing.programme.academic_department_id not in officer_acad_dept_ids:
                 row_reports.append(
                     RosterUploadRowReport(
                         row_number=idx,
@@ -713,6 +775,7 @@ async def upload_department_roster_csv(
                         reason="Student belongs to another department's programme and cannot be modified",
                     )
                 )
+
                 rejected_count += 1
                 continue
 
@@ -837,9 +900,9 @@ def create_department_roster_student(
     db: SessionDep,
     current_user: User = Depends(require_academic_officer),
 ) -> DepartmentRosterItem:
-    # Check programme belongs to this academic department
+    # Check programme belongs to one of officer's academic departments
     prog = db.get(Programme, body.programme_id)
-    if not prog or prog.academic_department_id != current_user.department_id:
+    if not prog or prog.academic_department_id not in user_academic_department_ids(current_user, db):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Programme does not belong to your academic department.",
@@ -911,19 +974,32 @@ def create_department_roster_student(
     description="Returns paginated student roster records belonging strictly to the officer's academic department.",
     responses={
         403: {"model": ErrorResponse, "description": "Forbidden for service department officers"},
+        404: {"model": ErrorResponse, "description": "Department not found among your academic departments"},
     },
 )
 def list_department_roster(
     db: SessionDep,
     current_user: User = Depends(require_academic_officer),
+    department_id: int | None = Query(None, description="Filter to a specific academic department"),
     search: str | None = Query(None, description="Search by name, registration number, or email"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> DepartmentRosterListResponse:
+    acad_dept_ids = user_academic_department_ids(current_user, db)
+    if department_id is not None:
+        if department_id not in acad_dept_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Department not found among your academic departments.",
+            )
+        target_acad_ids = [department_id]
+    else:
+        target_acad_ids = list(acad_dept_ids)
+
     base_query = (
         select(StudentRoster)
         .join(Programme, Programme.id == StudentRoster.programme_id)
-        .where(Programme.academic_department_id == current_user.department_id)
+        .where(Programme.academic_department_id.in_(target_acad_ids))
     )
 
     if search and search.strip():
@@ -987,11 +1063,12 @@ def patch_department_roster_student(
         .options(joinedload(StudentRoster.programme), joinedload(StudentRoster.user))
     ).scalars().first()
 
-    if not student or not student.programme or student.programme.academic_department_id != current_user.department_id:
+    if not student or not student.programme or student.programme.academic_department_id not in user_academic_department_ids(current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Student roster record not found in your academic department.",
         )
+
 
     if body.email is not None:
         new_email = normalize_email(str(body.email))
@@ -1084,18 +1161,31 @@ def get_department_lab_courses_template(
     description="Returns all lab and workshop courses managed by the officer's academic department.",
     responses={
         403: {"model": ErrorResponse, "description": "Forbidden for service department officers"},
+        404: {"model": ErrorResponse, "description": "Department not found among your academic departments"},
     },
 )
 def list_department_lab_courses(
     db: SessionDep,
     current_user: User = Depends(require_academic_officer),
+    department_id: int | None = Query(None, description="Filter to a specific academic department"),
     is_active: bool | None = Query(None, description="Filter by active status"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> LabCourseListResponse:
+    acad_dept_ids = user_academic_department_ids(current_user, db)
+    if department_id is not None:
+        if department_id not in acad_dept_ids:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Department not found among your academic departments.",
+            )
+        target_acad_ids = [department_id]
+    else:
+        target_acad_ids = list(acad_dept_ids)
+
     query = (
         select(LabCourse)
-        .where(LabCourse.academic_department_id == current_user.department_id)
+        .where(LabCourse.academic_department_id.in_(target_acad_ids))
         .options(joinedload(LabCourse.academic_department), joinedload(LabCourse.lab_department))
     )
     if is_active is not None:
@@ -1149,10 +1239,18 @@ def create_department_lab_course(
             detail="Assigned lab office must be a service department with ASSIGNED_ONLY applicability.",
         )
 
+    acad_dept_ids = user_academic_department_ids(current_user, db)
+    if body.academic_department_id and body.academic_department_id in acad_dept_ids:
+        target_acad_id = body.academic_department_id
+    elif acad_dept_ids:
+        target_acad_id = sorted(list(acad_dept_ids))[0]
+    else:
+        target_acad_id = current_user.department_id
+
     course = LabCourse(
         code=code_clean,
         name=body.name.strip(),
-        academic_department_id=current_user.department_id,
+        academic_department_id=target_acad_id,
         lab_department_id=lab_dept.id,
         specialization=body.specialization.strip() if body.specialization else None,
         is_active=True,
@@ -1221,6 +1319,9 @@ async def upload_department_lab_courses_csv(
     dept_by_name = {d.name.strip().lower(): d for d in assigned_depts}
     dept_by_id = {d.id: d for d in assigned_depts}
 
+    officer_acad_dept_ids = user_academic_department_ids(current_user, db)
+    default_acad_id = sorted(list(officer_acad_dept_ids))[0] if officer_acad_dept_ids else current_user.department_id
+
     row_reports: list[LabCourseUploadRowReport] = []
     created_count = 0
     updated_count = 0
@@ -1258,7 +1359,7 @@ async def upload_department_lab_courses_csv(
         ).scalars().first()
 
         if existing:
-            if existing.academic_department_id != current_user.department_id:
+            if existing.academic_department_id not in officer_acad_dept_ids:
                 row_reports.append(
                     LabCourseUploadRowReport(
                         row_number=idx,
@@ -1279,7 +1380,7 @@ async def upload_department_lab_courses_csv(
             new_course = LabCourse(
                 code=code,
                 name=name,
-                academic_department_id=current_user.department_id,
+                academic_department_id=default_acad_id,
                 lab_department_id=matched_dept.id,
                 specialization=specialization,
                 is_active=True,
@@ -1338,11 +1439,12 @@ def patch_department_lab_course(
         .options(joinedload(LabCourse.academic_department), joinedload(LabCourse.lab_department))
     ).scalars().first()
 
-    if not course or course.academic_department_id != current_user.department_id:
+    if not course or course.academic_department_id not in user_academic_department_ids(current_user, db):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Lab course not found in your academic department.",
         )
+
 
     if body.name is not None:
         course.name = body.name.strip()

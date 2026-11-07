@@ -111,21 +111,55 @@ export const adminApi = {
    * @param {string} data.full_name
    * @param {'dept_officer' | 'hod' | 'registrar_accounts'} data.role
    * @param {number} [data.department_id]
+   * @param {number[]} [data.department_ids]
    * @param {boolean} [data.google_only]
    */
-  async createStaffUser({ email, full_name, role, department_id, google_only } = {}) {
+  async createStaffUser({ email, full_name, role, department_id, department_ids, google_only } = {}) {
     const payload = {
       email,
       full_name,
       role,
     }
-    if (department_id) {
+    if (department_ids && department_ids.length > 0) {
+      payload.department_ids = department_ids.map(Number)
+    } else if (department_id) {
       payload.department_id = Number(department_id)
     }
     if (google_only !== undefined) {
       payload.google_only = Boolean(google_only)
     }
     const response = await api.post('/admin/users', payload)
+    return response.data
+  },
+
+  /**
+   * Get user detail including full departments membership list
+   * @param {number} id
+   */
+  async getUser(id) {
+    const response = await api.get(`/admin/users/${id}`)
+    return response.data
+  },
+
+  /**
+   * Add department membership to user
+   * @param {number} userId
+   * @param {number} departmentId
+   */
+  async addUserDepartment(userId, departmentId) {
+    const response = await api.post(`/admin/users/${userId}/departments`, {
+      department_id: Number(departmentId),
+    })
+    return response.data
+  },
+
+  /**
+   * Remove department membership from user
+   * @param {number} userId
+   * @param {number} departmentId
+   */
+  async removeUserDepartment(userId, departmentId) {
+    const response = await api.delete(`/admin/users/${userId}/departments/${departmentId}`)
     return response.data
   },
 

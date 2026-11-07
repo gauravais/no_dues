@@ -119,17 +119,13 @@ def require_academic_officer(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Operation forbidden: required role is dept_officer, your role is {current_user.role.value}",
         )
-    if not current_user.department_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Operation forbidden: officer is not assigned to any department",
-        )
-    from backend.app.models.university import Department, DepartmentKind
-    dept = db.get(Department, current_user.department_id)
-    if not dept or dept.kind != DepartmentKind.academic:
+    from backend.app.services.workflow import user_academic_department_ids
+    acad_dept_ids = user_academic_department_ids(current_user, db)
+    if not acad_dept_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Operation forbidden: roster and lab catalog management is restricted to academic department officers",
         )
     return current_user
+
 

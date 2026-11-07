@@ -26,7 +26,8 @@ from backend.app.services.exceptions import (
     WorkflowConflictError,
     WorkflowBadRequestError,
 )
-from backend.app.services.workflow import hod_decide, add_office_to_request
+from backend.app.services.workflow import hod_decide, add_office_to_request, user_academic_department_ids
+
 
 router = APIRouter(prefix="/hod", tags=["HoD"])
 require_hod = require_roles(UserRole.hod)
@@ -117,7 +118,8 @@ def get_hod_queue(
     db: SessionDep,
     current_user: User = Depends(require_hod),
 ) -> list[HoDQueueItem]:
-    if not current_user.department_id:
+    hod_dept_ids = user_academic_department_ids(current_user, db)
+    if not hod_dept_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="HoD user is not associated with an academic department.",
@@ -129,12 +131,13 @@ def get_hod_queue(
         .where(ClearanceRequest.status == ClearanceStatus.HOD_REVIEW)
         .join(StudentRoster, StudentRoster.id == ClearanceRequest.roster_id)
         .join(Programme, Programme.id == StudentRoster.programme_id)
-        .where(Programme.academic_department_id == current_user.department_id)
+        .where(Programme.academic_department_id.in_(hod_dept_ids))
         .options(
             joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.programme)
         )
         .order_by(ClearanceRequest.updated_at.asc())
     )
+
 
     requests = db.execute(query).scalars().all()
 
@@ -196,12 +199,14 @@ def get_hod_request_detail(
         )
 
     # Validate HoD department matches student's academic department
+    hod_dept_ids = user_academic_department_ids(current_user, db)
     student_academic_dept_id = req.roster_entry.programme.academic_department_id
-    if student_academic_dept_id != current_user.department_id:
+    if student_academic_dept_id not in hod_dept_ids:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Clearance request does not belong to your academic department.",
         )
+
 
     return _format_hod_detail(req, db=db)
 

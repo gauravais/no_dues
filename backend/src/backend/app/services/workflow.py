@@ -5,7 +5,7 @@ Contains NO FastAPI or Starlette imports so it can be tested in isolation.
 import uuid
 from datetime import datetime, timezone
 from typing import Sequence
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -17,7 +17,7 @@ from backend.app.models.university import (
 )
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
 from backend.app.models.lab_course import LabCourse
-from backend.app.models.user import User, UserRole
+from backend.app.models.user import User, UserRole, UserDepartment
 from backend.app.models.clearance import (
     ClearanceRequest,
     DepartmentApproval,
@@ -42,6 +42,108 @@ from backend.app.services.email import (
     notify_department_added,
     notify_request_cancelled,
 )
+
+
+def user_department_ids(user: User, session: Session | None = None) -> set[int]:
+    """
+    Returns the set of department IDs that the user belongs to.
+    Computes the union of user_departments (via user.department_memberships or DB query)
+    and users.department_id fallback.
+    """
+    dept_ids: set[int] = set()
+    if user.department_id is not None:
+        dept_ids.add(user.department_id)
+
+    # Check loaded relationship if available
+    try:
+        memberships = getattr(user, "department_memberships", None)
+        if memberships:
+            for m in memberships:
+                dept_ids.add(m.department_id)
+    except Exception:
+        pass
+
+    if session is not None and user.id is not None:
+        rows = session.execute(
+            select(UserDepartment.department_id).where(UserDepartment.user_id == user.id)
+        ).scalars().all()
+        for did in rows:
+            dept_ids.add(did)
+
+    return dept_ids
+
+
+def active_officers_for(session: Session, department_id: int) -> list[User]:
+    """
+    Returns list of active users with role dept_officer who have membership in this department
+    (via user_departments or fallback users.department_id).
+    """
+    stmt = (
+        select(User)
+        .outerjoin(UserDepartment, UserDepartment.user_id == User.id)
+        .where(
+            User.role == UserRole.dept_officer,
+            User.is_active == True,
+            or_(
+                User.department_id == department_id,
+                UserDepartment.department_id == department_id,
+            ),
+        )
+        .distinct()
+    )
+    return list(session.execute(stmt).scalars().all())
+
+
+def active_hod_for(session: Session, academic_department_id: int) -> User | None:
+    """
+    Returns active user with role hod who has membership in this academic department
+    (via user_departments or fallback users.department_id).
+    """
+    stmt = (
+        select(User)
+        .outerjoin(UserDepartment, UserDepartment.user_id == User.id)
+        .where(
+            User.role == UserRole.hod,
+            User.is_active == True,
+            or_(
+                User.department_id == academic_department_id,
+                UserDepartment.department_id == academic_department_id,
+            ),
+        )
+        .distinct()
+    )
+    return session.execute(stmt).scalars().first()
+
+
+def user_academic_department_ids(user: User, session: Session) -> set[int]:
+    """
+    Returns the subset of department IDs the user belongs to that have kind == DepartmentKind.academic.
+    """
+    all_dept_ids = user_department_ids(user, session)
+    if not all_dept_ids:
+        return set()
+    academic_ids = session.execute(
+        select(Department.id).where(
+            Department.id.in_(all_dept_ids),
+            Department.kind == DepartmentKind.academic,
+        )
+    ).scalars().all()
+    return set(academic_ids)
+
+
+def get_user_departments(user: User, session: Session) -> list[Department]:
+    """
+    Returns the Department models corresponding to all department memberships for the user.
+    """
+    dept_ids = user_department_ids(user, session)
+    if not dept_ids:
+        return []
+    return list(
+        session.execute(
+            select(Department).where(Department.id.in_(dept_ids)).order_by(Department.name.asc())
+        ).scalars().all()
+    )
+
 
 
 def get_applicable_departments(
@@ -213,13 +315,7 @@ def create_request(
     if not academic_dept:
         raise WorkflowNotFoundError(f"Academic department {prog.academic_department_id} not found.")
 
-    active_hod = session.execute(
-        select(User.id).where(
-            User.role == UserRole.hod,
-            User.department_id == academic_dept.id,
-            User.is_active == True,
-        )
-    ).first()
+    active_hod = active_hod_for(session, academic_dept.id)
     if not active_hod:
         raise WorkflowConflictError(
             f"Academic department '{academic_dept.name}' has no active Head of Department (HoD). Cannot submit clearance request."
@@ -258,14 +354,8 @@ def create_request(
                 )
 
             # 3. each with an active officer
-            active_officer = session.execute(
-                select(User.id).where(
-                    User.role == UserRole.dept_officer,
-                    User.department_id == d.id,
-                    User.is_active == True,
-                )
-            ).first()
-            if not active_officer:
+            active_officers = active_officers_for(session, d.id)
+            if not active_officers:
                 raise WorkflowConflictError(
                     f"Department '{d.name}' has no active dealing officer. Cannot submit clearance request."
                 )
@@ -282,17 +372,12 @@ def create_request(
 
     # Validate that every applicable department has at least one active officer
     for dept in applicable_depts:
-        active_officer = session.execute(
-            select(User.id).where(
-                User.role == UserRole.dept_officer,
-                User.department_id == dept.id,
-                User.is_active == True,
-            )
-        ).first()
-        if not active_officer:
+        active_officers = active_officers_for(session, dept.id)
+        if not active_officers:
             raise WorkflowConflictError(
                 f"Department '{dept.name}' has no active dealing officer. Cannot submit clearance request."
             )
+
 
     now = datetime.now(timezone.utc)
     effective_is_hosteller = declared_is_hosteller if declared_is_hosteller is not None else roster.is_hosteller
@@ -407,8 +492,9 @@ def decide_approval(
         raise WorkflowNotFoundError(f"Department approval {approval_id} not found.")
 
     # 4. Check ownership (404)
-    if approval.department_id != officer_user.department_id:
+    if approval.department_id not in user_department_ids(officer_user, session):
         raise WorkflowNotFoundError("Approval does not belong to your assigned department.")
+
 
     # 5. Check PENDING status (409)
     if approval.status != ApprovalStatus.PENDING:
@@ -572,8 +658,9 @@ def hod_decide(
         raise WorkflowNotFoundError("Student roster entry not found.")
 
     prog = session.get(Programme, roster.programme_id)
-    if not prog or prog.academic_department_id != hod_user.department_id:
+    if not prog or prog.academic_department_id not in user_academic_department_ids(hod_user, session):
         raise WorkflowNotFoundError("Clearance request does not belong to your academic department.")
+
 
     # 2. Check status with generic message (409)
     if req.status != ClearanceStatus.HOD_REVIEW:
@@ -744,17 +831,12 @@ def add_department_to_request(
         raise WorkflowConflictError(f"Department '{dept.name}' is already part of this clearance request.")
 
     # Active officer check
-    active_officer = session.execute(
-        select(User.id).where(
-            User.role == UserRole.dept_officer,
-            User.department_id == dept.id,
-            User.is_active == True,
-        )
-    ).first()
-    if not active_officer:
+    active_officers = active_officers_for(session, dept.id)
+    if not active_officers:
         raise WorkflowConflictError(
             f"Department '{dept.name}' has no active dealing officer. Cannot add to clearance request."
         )
+
 
     now = datetime.now(timezone.utc)
     approval = DepartmentApproval(
@@ -847,8 +929,9 @@ def add_office_to_request(
         if (req.roster_entry and req.roster_entry.programme)
         else None
     )
-    if student_acad_dept_id != acting_user.department_id:
+    if student_acad_dept_id not in user_academic_department_ids(acting_user, session):
         raise WorkflowNotFoundError("Clearance request not found in your academic department.")
+
 
     if req.status in (ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED):
         raise WorkflowConflictError("Cannot add department to a finalized clearance request.")
@@ -868,17 +951,12 @@ def add_office_to_request(
         raise WorkflowConflictError(f"Department '{dept.name}' is already part of this clearance request.")
 
     # Active officer check
-    active_officer = session.execute(
-        select(User.id).where(
-            User.role == UserRole.dept_officer,
-            User.department_id == dept.id,
-            User.is_active == True,
-        )
-    ).first()
-    if not active_officer:
+    active_officers = active_officers_for(session, dept.id)
+    if not active_officers:
         raise WorkflowConflictError(
             f"Department '{dept.name}' has no active dealing officer. Cannot add to clearance request."
         )
+
 
     now = datetime.now(timezone.utc)
     approval = DepartmentApproval(
@@ -961,18 +1039,13 @@ def student_declare_lab_courses(
 
         if c.lab_department_id not in existing_dept_ids:
             lab_dept = session.get(Department, c.lab_department_id)
-            active_officer = session.execute(
-                select(User.id).where(
-                    User.role == UserRole.dept_officer,
-                    User.department_id == c.lab_department_id,
-                    User.is_active == True,
-                )
-            ).first()
-            if not active_officer:
+            active_officers = active_officers_for(session, c.lab_department_id)
+            if not active_officers:
                 dept_name = lab_dept.name if lab_dept else f"#{c.lab_department_id}"
                 raise WorkflowConflictError(
                     f"Department '{dept_name}' has no active dealing officer. Cannot add to clearance request."
                 )
+
 
             approval = DepartmentApproval(
                 request_id=req.id,
@@ -1100,9 +1173,10 @@ def staff_cancel_request(
             if (req.roster_entry and req.roster_entry.programme)
             else None
         )
-        officer_dept = staff_user.department
-        if not officer_dept or officer_dept.kind != DepartmentKind.academic or staff_user.department_id != student_acad_id:
+        officer_acad_ids = user_academic_department_ids(staff_user, session)
+        if not student_acad_id or student_acad_id not in officer_acad_ids:
             raise WorkflowForbiddenError("Academic officers can only cancel clearance requests of their own students.")
+
     elif staff_user.role != UserRole.admin:
         raise WorkflowForbiddenError("Only academic department officers or administrators can cancel clearance requests.")
 

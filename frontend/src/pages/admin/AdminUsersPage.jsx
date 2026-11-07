@@ -42,6 +42,9 @@ import {
   UserX,
   FileSpreadsheet,
   Download,
+  Building2,
+  Trash2,
+  Plus,
 } from 'lucide-react'
 
 const ROLE_BADGES = {
@@ -75,10 +78,16 @@ export function AdminUsersPage() {
     full_name: '',
     email: '',
     role: 'dept_officer',
-    department_id: '',
+    department_ids: [],
     google_only: false,
   })
   const [createError, setCreateError] = useState('')
+
+  // Manage User Offices (Detail Panel) State
+  const [manageOfficesUser, setManageOfficesUser] = useState(null)
+  const [addDeptSelectId, setAddDeptSelectId] = useState('')
+  const [confirmRemoveTarget, setConfirmRemoveTarget] = useState(null) // { user, dept }
+  const [confirmAddDeptTarget, setConfirmAddDeptTarget] = useState(null) // { user, dept }
 
   // Bulk Upload State
   const [bulkFile, setBulkFile] = useState(null)
@@ -205,6 +214,43 @@ export function AdminUsersPage() {
     },
   })
 
+  // Add Department to User Mutation
+  const addDepartmentMutation = useMutation({
+    mutationFn: ({ userId, departmentId }) =>
+      adminApi.addUserDepartment(userId, departmentId),
+    onSuccess: (data) => {
+      toast.success('Department assigned to user.')
+      setConfirmAddDeptTarget(null)
+      setAddDeptSelectId('')
+      setManageOfficesUser(data)
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'offices'] })
+    },
+    onError: (err) => {
+      setConfirmAddDeptTarget(null)
+      const msg = err.response?.data?.detail || 'Failed to assign department.'
+      toast.error(msg)
+    },
+  })
+
+  // Remove Department from User Mutation
+  const removeDepartmentMutation = useMutation({
+    mutationFn: ({ userId, departmentId }) =>
+      adminApi.removeUserDepartment(userId, departmentId),
+    onSuccess: (data) => {
+      toast.success('Department removed from user.')
+      setConfirmRemoveTarget(null)
+      setManageOfficesUser(data)
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'offices'] })
+    },
+    onError: (err) => {
+      setConfirmRemoveTarget(null)
+      const msg = err.response?.data?.detail || 'Failed to remove department.'
+      toast.error(msg)
+    },
+  })
+
   // Bulk Upload Mutation
   const bulkUploadMutation = useMutation({
     mutationFn: ({ file, googleOnly }) => adminApi.bulkUploadUsers(file, { google_only: googleOnly }),
@@ -240,9 +286,13 @@ export function AdminUsersPage() {
 
     if (
       (createForm.role === 'dept_officer' || createForm.role === 'hod') &&
-      !createForm.department_id
+      createForm.department_ids.length === 0
     ) {
-      setCreateError(`Department assignment is mandatory for ${createForm.role}.`)
+      setCreateError(
+        createForm.role === 'hod'
+          ? 'At least one academic department is strictly required for Chairperson (HoD).'
+          : 'Department assignment is mandatory. Please select at least one department.'
+      )
       return
     }
 
@@ -252,8 +302,9 @@ export function AdminUsersPage() {
       role: createForm.role,
       google_only: Boolean(createForm.google_only),
     }
-    if (createForm.department_id) {
-      payload.department_id = Number(createForm.department_id)
+    if (createForm.department_ids.length > 0) {
+      payload.department_ids = createForm.department_ids.map(Number)
+      payload.department_id = createForm.department_ids[0]
     }
 
     createUserMutation.mutate(payload)
@@ -268,8 +319,8 @@ export function AdminUsersPage() {
 
   const downloadBulkTemplate = () => {
     const csvContent =
-      'email,full_name,role,department,google_only\r\n' +
-      'officer.csit@svsu.ac.in,Dr. Rajesh Kumar,dept_officer,Skill Department of CS/IT,false\r\n' +
+      'email,full_name,role,departments,google_only\r\n' +
+      'officer.multi@svsu.ac.in,Dr. Rajesh Kumar,dept_officer,Library|Sports,false\r\n' +
       'hod.csit@svsu.ac.in,Dr. Sunita Sharma,hod,Skill Department of CS/IT,true\r\n' +
       'accounts.staff@svsu.ac.in,Ramesh Chand,registrar_accounts,Account Section,false\r\n'
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -348,15 +399,37 @@ export function AdminUsersPage() {
         },
       },
       {
-        accessorKey: 'department_name',
-        header: 'Department / Section',
-        cell: ({ row }) => (
-          <span className="text-xs text-zinc-700 max-w-[220px] line-clamp-1">
-            {row.original.department_name || (
-              <span className="text-zinc-400 italic">None / University-Wide</span>
-            )}
-          </span>
-        ),
+        id: 'departments',
+        header: 'Departments / Offices',
+        cell: ({ row }) => {
+          const userDepts = row.original.departments || []
+          if (userDepts.length > 0) {
+            return (
+              <div className="flex flex-wrap gap-1 max-w-[260px] py-1">
+                {userDepts.map((d) => (
+                  <Badge
+                    key={d.id}
+                    variant="outline"
+                    className="text-[10px] py-0 px-1.5 bg-zinc-50 border-zinc-200 text-zinc-800"
+                  >
+                    {d.name}
+                  </Badge>
+                ))}
+              </div>
+            )
+          }
+          if (row.original.department_name) {
+            return (
+              <Badge
+                variant="outline"
+                className="text-[10px] py-0 px-1.5 bg-zinc-50 border-zinc-200 text-zinc-800"
+              >
+                {row.original.department_name}
+              </Badge>
+            )
+          }
+          return <span className="text-zinc-400 italic text-xs">None / University-Wide</span>
+        },
       },
       {
         accessorKey: 'is_active',
@@ -396,6 +469,21 @@ export function AdminUsersPage() {
 
           return (
             <div className="flex items-center gap-1.5 flex-wrap">
+              {(target.role === 'dept_officer' || target.role === 'hod') && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setManageOfficesUser(target)
+                    setAddDeptSelectId('')
+                  }}
+                  className="h-7 text-[11px] gap-1 bg-white hover:bg-zinc-50 text-zinc-700 border-zinc-200"
+                >
+                  <Building2 className="w-3 h-3 text-zinc-500" />
+                  Offices ({target.departments?.length || (target.department_id ? 1 : 0)})
+                </Button>
+              )}
+
               <Button
                 size="sm"
                 variant="outline"
@@ -641,15 +729,13 @@ export function AdminUsersPage() {
                   value={createForm.role}
                   onChange={(e) => {
                     const newRole = e.target.value
-                    // If switching to HoD, reset department if not academic
-                    let newDeptId = createForm.department_id
+                    // If switching to HoD, filter department_ids to academic only
+                    let newDeptIds = createForm.department_ids
                     if (newRole === 'hod') {
-                      const currentDept = departments.find((d) => d.id === Number(newDeptId))
-                      if (currentDept?.kind !== 'academic') {
-                        newDeptId = academicDepartments[0]?.id ? String(academicDepartments[0].id) : ''
-                      }
+                      const academicIdSet = new Set(academicDepartments.map((d) => d.id))
+                      newDeptIds = createForm.department_ids.filter((id) => academicIdSet.has(id))
                     }
-                    setCreateForm({ ...createForm, role: newRole, department_id: newDeptId })
+                    setCreateForm({ ...createForm, role: newRole, department_ids: newDeptIds })
                   }}
                   className="w-full h-9 rounded-md border border-input bg-white px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
@@ -660,38 +746,58 @@ export function AdminUsersPage() {
                 </select>
               </div>
 
-              {/* Department Selection (Strictly filtered for HoD to academic faculties) */}
+              {/* Department Multi-Select (Filtered for HoD to academic faculties only) */}
               {(createForm.role === 'dept_officer' || createForm.role === 'hod') && (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="newUserDept" className="text-xs font-semibold text-zinc-800">
-                      Assigned Department
+                    <Label className="text-xs font-semibold text-zinc-800">
+                      Assigned Departments ({createForm.department_ids.length} selected) *
                     </Label>
-                    {createForm.role === 'hod' && (
-                      <span className="text-[10px] text-purple-700 font-medium">
-                        Academic Faculties Only
-                      </span>
-                    )}
+                    <span className="text-[10px] text-zinc-500 font-medium">
+                      {createForm.role === 'hod' ? 'Academic Faculties Only' : 'Multiple Allowed'}
+                    </span>
                   </div>
-                  <select
-                    id="newUserDept"
-                    value={createForm.department_id}
-                    onChange={(e) => setCreateForm({ ...createForm, department_id: e.target.value })}
-                    className="w-full h-9 rounded-md border border-input bg-white px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    required
-                  >
-                    <option value="">Select Department...</option>
-                    {(createForm.role === 'hod' ? academicDepartments : departments).map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} {d.kind === 'academic' ? '(Academic)' : '(Service)'}
-                      </option>
-                    ))}
-                  </select>
-                  {createForm.role === 'hod' && (
-                    <p className="text-[11px] text-zinc-500">
-                      Chairperson (HoD) accounts may only be provisioned for academic teaching faculties.
-                    </p>
-                  )}
+                  <div className="max-h-44 overflow-y-auto border border-zinc-200 rounded-lg p-2.5 space-y-1.5 bg-zinc-50/50">
+                    {(createForm.role === 'hod' ? academicDepartments : departments).map((d) => {
+                      const isChecked = createForm.department_ids.includes(d.id)
+                      return (
+                        <label
+                          key={d.id}
+                          className="flex items-center justify-between gap-2 text-xs p-1.5 rounded hover:bg-zinc-100/80 cursor-pointer transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setCreateForm({
+                                    ...createForm,
+                                    department_ids: [...createForm.department_ids, d.id],
+                                  })
+                                } else {
+                                  setCreateForm({
+                                    ...createForm,
+                                    department_ids: createForm.department_ids.filter((id) => id !== d.id),
+                                  })
+                                }
+                              }}
+                              className="h-3.5 w-3.5 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950 cursor-pointer"
+                            />
+                            <span className="font-medium text-zinc-800">{d.name}</span>
+                          </div>
+                          <Badge variant="outline" className="text-[9px] py-0 px-1 font-mono uppercase bg-white shrink-0">
+                            {d.kind}
+                          </Badge>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[11px] text-zinc-500">
+                    {createForm.role === 'hod'
+                      ? 'Chairperson (HoD) accounts strictly require at least one academic department.'
+                      : 'Department officers must have at least one assigned department office. Select all applicable offices.'}
+                  </p>
                 </div>
               )}
 
@@ -794,8 +900,8 @@ export function AdminUsersPage() {
                 Bulk Staff Provisioning (CSV)
               </DialogTitle>
             </div>
-            <DialogDescription className="text-xs">
-              Upload a comma-separated CSV with columns <code className="font-mono text-zinc-900">email, full_name, role, department</code> and optional column <code className="font-mono text-zinc-900">google_only</code> (true/false).
+            <DialogDescription className="text-xs leading-relaxed">
+              Upload a comma-separated CSV with columns <code className="font-mono text-zinc-900">email, full_name, role, departments</code> and optional column <code className="font-mono text-zinc-900">google_only</code> (true/false). For users with multiple department memberships, separate department names with a pipe (<code className="font-mono text-zinc-900">|</code>), for example <code className="font-mono text-zinc-900">Library|Sports</code>.
             </DialogDescription>
           </DialogHeader>
 
@@ -824,7 +930,7 @@ export function AdminUsersPage() {
               <div className="space-y-0.5">
                 <span className="font-semibold text-zinc-900 block">Download Official Template</span>
                 <p className="text-[11px] text-zinc-500">
-                  Pre-formatted CSV with template staff rows and valid university departments.
+                  Pre-formatted CSV with template staff rows, multiple department support (e.g. <span className="font-mono text-zinc-700">Library|Sports</span>), and valid university departments.
                 </p>
               </div>
               <Button
@@ -1176,6 +1282,298 @@ export function AdminUsersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* MANAGE USER OFFICES DIALOG */}
+      <Dialog
+        open={Boolean(manageOfficesUser)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setManageOfficesUser(null)
+            setAddDeptSelectId('')
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg bg-white p-6 max-h-[85vh] overflow-y-auto">
+          <DialogHeader className="pb-3 border-b border-zinc-100">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-zinc-100 text-zinc-900 flex items-center justify-center">
+                <Building2 className="w-4 h-4" />
+              </div>
+              <DialogTitle className="font-heading font-bold text-base">
+                Manage Department Memberships
+              </DialogTitle>
+            </div>
+            <DialogDescription className="text-xs">
+              View, add, or remove assigned university offices for <strong className="text-zinc-900">{manageOfficesUser?.full_name || manageOfficesUser?.email}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          {manageOfficesUser && (
+            <div className="space-y-5 py-3 text-xs">
+              {/* User Context Strip */}
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center justify-between">
+                <div>
+                  <span className="font-semibold text-zinc-900 block">
+                    {manageOfficesUser.full_name}
+                  </span>
+                  <span className="font-mono text-[11px] text-zinc-500">
+                    {manageOfficesUser.email}
+                  </span>
+                </div>
+                <Badge variant="outline" className="text-[10px] uppercase font-mono bg-white">
+                  {ROLE_BADGES[manageOfficesUser.role]?.label || manageOfficesUser.role}
+                </Badge>
+              </div>
+
+              {/* Current Assigned Offices */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-zinc-900">
+                    Assigned Offices ({(manageOfficesUser.departments || []).length})
+                  </span>
+                  {(manageOfficesUser.departments || []).length <= 1 && (
+                    <span className="text-[10px] text-amber-700 font-medium">
+                      Last office cannot be removed
+                    </span>
+                  )}
+                </div>
+
+                <div className="border border-zinc-200 rounded-lg divide-y divide-zinc-100 bg-white">
+                  {(manageOfficesUser.departments || []).length === 0 ? (
+                    <div className="p-4 text-center text-xs text-zinc-400 italic">
+                      No offices currently assigned.
+                    </div>
+                  ) : (
+                    manageOfficesUser.departments.map((dept) => {
+                      const isLastDept = manageOfficesUser.departments.length <= 1
+                      return (
+                        <div
+                          key={dept.id}
+                          className="p-3 flex items-center justify-between gap-3 hover:bg-zinc-50/60 transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-xs text-zinc-900">
+                              {dept.name}
+                            </span>
+                            <Badge variant="outline" className="text-[9px] font-mono uppercase bg-zinc-50">
+                              {dept.kind}
+                            </Badge>
+                          </div>
+
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={isLastDept || removeDepartmentMutation.isPending}
+                            onClick={() =>
+                              setConfirmRemoveTarget({
+                                user: manageOfficesUser,
+                                dept,
+                              })
+                            }
+                            title={
+                              isLastDept
+                                ? 'The last department cannot be removed; deactivate the user instead.'
+                                : `Remove ${dept.name}`
+                            }
+                            className={`h-7 px-2 text-[11px] gap-1 ${
+                              isLastDept
+                                ? 'opacity-40 cursor-not-allowed text-zinc-400'
+                                : 'text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700'
+                            }`}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Remove
+                          </Button>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+
+                {(manageOfficesUser.departments || []).length <= 1 && (
+                  <p className="text-[11px] text-zinc-500 leading-snug">
+                    Institutional rule: A staff account must have at least one department membership. To revoke access completely, deactivate the user account from the staff directory.
+                  </p>
+                )}
+              </div>
+
+              {/* Add Department Section */}
+              <div className="space-y-2 pt-2 border-t border-zinc-100">
+                <span className="text-xs font-semibold text-zinc-900 block">
+                  Assign Additional Department
+                </span>
+
+                {(() => {
+                  const assignedIdSet = new Set(
+                    (manageOfficesUser.departments || []).map((d) => d.id)
+                  )
+                  const availableDepts = (
+                    manageOfficesUser.role === 'hod' ? academicDepartments : departments
+                  ).filter((d) => !assignedIdSet.has(d.id))
+
+                  if (availableDepts.length === 0) {
+                    return (
+                      <p className="text-xs text-zinc-400 italic">
+                        All eligible departments have already been assigned to this user.
+                      </p>
+                    )
+                  }
+
+                  return (
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={addDeptSelectId}
+                        onChange={(e) => setAddDeptSelectId(e.target.value)}
+                        className="flex-1 h-9 rounded-md border border-input bg-white px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      >
+                        <option value="">Select Department to Assign...</option>
+                        {availableDepts.map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name} {d.kind === 'academic' ? '(Academic)' : '(Service)'}
+                          </option>
+                        ))}
+                      </select>
+
+                      <Button
+                        size="sm"
+                        disabled={!addDeptSelectId || addDepartmentMutation.isPending}
+                        onClick={() => {
+                          const targetDept = departments.find(
+                            (d) => d.id === Number(addDeptSelectId)
+                          )
+                          if (targetDept) {
+                            setConfirmAddDeptTarget({
+                              user: manageOfficesUser,
+                              dept: targetDept,
+                            })
+                          }
+                        }}
+                        className="h-9 px-3 text-xs bg-primary text-primary-foreground hover:bg-zinc-800 gap-1 font-semibold"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Assign Office
+                      </Button>
+                    </div>
+                  )
+                })()}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="pt-3 border-t border-zinc-100">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setManageOfficesUser(null)
+                setAddDeptSelectId('')
+              }}
+              className="text-xs h-9 w-full sm:w-auto"
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CONFIRM REMOVE DEPARTMENT ALERT DIALOG */}
+      <AlertDialog
+        open={Boolean(confirmRemoveTarget)}
+        onOpenChange={(open) => {
+          if (!open) setConfirmRemoveTarget(null)
+        }}
+      >
+        <AlertDialogContent className="bg-white p-6 max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+              Remove Department Membership?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs space-y-2 text-zinc-600">
+              <p>
+                Are you sure you want to remove <strong className="text-zinc-900">{confirmRemoveTarget?.dept?.name}</strong> from <strong className="text-zinc-900">{confirmRemoveTarget?.user?.full_name}</strong>?
+              </p>
+              <p className="text-[11px] text-zinc-500">
+                This officer will immediately lose review and approval privileges for student clearance requests associated with this office.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel
+              disabled={removeDepartmentMutation.isPending}
+              onClick={() => setConfirmRemoveTarget(null)}
+              className="text-xs h-9"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={removeDepartmentMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                if (confirmRemoveTarget) {
+                  removeDepartmentMutation.mutate({
+                    userId: confirmRemoveTarget.user.id,
+                    departmentId: confirmRemoveTarget.dept.id,
+                  })
+                }
+              }}
+              className="bg-rose-600 text-white hover:bg-rose-700 text-xs h-9 font-semibold"
+            >
+              {removeDepartmentMutation.isPending ? 'Removing...' : 'Confirm Removal'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* CONFIRM ADD DEPARTMENT ALERT DIALOG */}
+      <AlertDialog
+        open={Boolean(confirmAddDeptTarget)}
+        onOpenChange={(open) => {
+          if (!open) setConfirmAddDeptTarget(null)
+        }}
+      >
+        <AlertDialogContent className="bg-white p-6 max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950 flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-zinc-900" />
+              Assign Department Membership?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs space-y-2 text-zinc-600">
+              <p>
+                Assign <strong className="text-zinc-900">{confirmAddDeptTarget?.dept?.name}</strong> to <strong className="text-zinc-900">{confirmAddDeptTarget?.user?.full_name}</strong>?
+              </p>
+              <p className="text-[11px] text-zinc-500">
+                This officer will immediately receive review access for pending student clearances under this office.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel
+              disabled={addDepartmentMutation.isPending}
+              onClick={() => setConfirmAddDeptTarget(null)}
+              className="text-xs h-9"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={addDepartmentMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                if (confirmAddDeptTarget) {
+                  addDepartmentMutation.mutate({
+                    userId: confirmAddDeptTarget.user.id,
+                    departmentId: confirmAddDeptTarget.dept.id,
+                  })
+                }
+              }}
+              className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
+            >
+              {addDepartmentMutation.isPending ? 'Assigning...' : 'Confirm Assignment'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   )
 }

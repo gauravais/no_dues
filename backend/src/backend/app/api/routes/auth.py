@@ -40,8 +40,10 @@ from backend.app.schemas.auth import (
     UserMeResponse,
     RosterSummary,
 )
-from backend.app.schemas.common import ErrorResponse
+from backend.app.schemas.common import ErrorResponse, DepartmentBrief
 from backend.app.services.email import send_otp_email, send_outbox_email_by_id
+from backend.app.services.workflow import get_user_departments
+
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -568,8 +570,17 @@ def google_auth_login(
         401: {"model": ErrorResponse, "description": "Unauthenticated or invalid token"},
     },
 )
-def get_my_profile(current_user: CurrentUserAnyDep) -> UserMeResponse:
+def get_my_profile(
+    current_user: CurrentUserAnyDep,
+    db: SessionDep,
+) -> UserMeResponse:
     dept_name = current_user.department.name if current_user.department else None
+
+    depts = get_user_departments(current_user, db)
+    dept_briefs = [
+        DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value)
+        for d in depts
+    ]
 
     roster_summary = None
     if current_user.role == UserRole.student and current_user.roster_entry:
@@ -597,9 +608,11 @@ def get_my_profile(current_user: CurrentUserAnyDep) -> UserMeResponse:
         role=current_user.role.value,
         department_id=current_user.department_id,
         department_name=dept_name,
+        departments=dept_briefs,
         must_change_password=current_user.must_change_password,
         roster=roster_summary,
     )
+
 
 
 @router.post(

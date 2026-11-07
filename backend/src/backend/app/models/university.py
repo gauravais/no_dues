@@ -53,7 +53,8 @@ class Department(Base):
 
     faculty = relationship("Faculty", back_populates="departments")
     programmes = relationship("Programme", back_populates="department")
-    users = relationship("User", back_populates="department")
+    users = relationship("User", back_populates="department", foreign_keys="User.department_id")
+    user_memberships = relationship("UserDepartment", back_populates="department", cascade="all, delete-orphan", foreign_keys="UserDepartment.department_id")
     roster_assigned = relationship("RosterAssignedDepartment", back_populates="department")
     approvals = relationship("DepartmentApproval", back_populates="department")
 

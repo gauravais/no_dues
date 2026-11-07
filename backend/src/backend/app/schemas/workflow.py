@@ -52,10 +52,19 @@ class DecisionRequest(BaseModel):
     )
 
 
+class OfficePendingCount(BaseModel):
+    """Pending count for a single office belonging to an officer."""
+    department_id: int = Field(..., description="Office department ID", examples=[4])
+    department_name: str = Field(..., description="Office department name", examples=["Central Library"])
+    pending: int = Field(..., description="Count of pending approvals in this office", examples=[2])
+
+
 class DepartmentQueueItem(BaseModel):
     """Queue entry for department officers reviewing clearances."""
     approval_id: int = Field(..., description="Approval row ID", examples=[10])
     request_id: int = Field(..., description="Parent clearance request ID", examples=[1])
+    department_id: int = Field(..., description="Department ID of this approval", examples=[4])
+    department_name: str = Field(..., description="Department name of this approval", examples=["Central Library"])
     student_name: str = Field(..., description="Student full name", examples=["Arjun Mehta"])
     registration_number: str = Field(..., description="Student registration number", examples=["DEMO2026001"])
     programme_name: str = Field(..., description="Student enrolled programme", examples=["Bachelor of Technology (B.Tech.) Computer Engineering"])
@@ -73,6 +82,8 @@ class DepartmentQueueResponse(BaseModel):
     total: int = Field(..., description="Total records matching query filter", examples=[1])
     limit: int = Field(..., description="Page size limit", examples=[50])
     offset: int = Field(..., description="Page offset", examples=[0])
+    office_counts: list[OfficePendingCount] = Field(default_factory=list, description="Pending clearance counts across officer's assigned offices")
+
 
 
 class HoDQueueItem(BaseModel):

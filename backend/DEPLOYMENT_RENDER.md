@@ -189,20 +189,50 @@ To verify that attackers cannot bypass IP rate limits or spoof IPs by injecting 
 
 ## 11. Backup & Disaster Recovery
 
-### Manual Database Backup via `pg_dump`
-Take periodic snapshots from your secure terminal:
+### Before Deploying Migration 0011 to Neon, Take a pg_dump Backup
+
+Before applying migration `0011_user_departments` (or any schema migration) on your live Neon PostgreSQL database, take a full binary backup from your local machine.
+
+#### 1. Take Pre-Migration Backup (`pg_dump`)
 
 ```bash
-# Export compressed binary dump
-pg_dump "postgresql://nodues_user:secret_password@ep-cold-star-123456.ap-southeast-1.aws.neon.tech/nodues_db?sslmode=require" \
+# Set your Neon connection string in a temporary variable (never commit)
+export NEON_DATABASE_URL="postgresql://nodues_user:secret_password@ep-cold-star-123456.ap-southeast-1.aws.neon.tech/nodues_db?sslmode=require"
+
+# Export compressed binary custom-format dump
+pg_dump "$NEON_DATABASE_URL" \
   --format=custom \
   --no-owner \
   --no-privileges \
-  --file="nodues_backup_$(date +%Y%m%d_%H%M%S).dump"
+  --verbose \
+  --file="neon_pre_0011_backup_$(date +%Y%m%d_%H%M%S).dump"
+
+# Verify the backup file was created and is non-empty
+ls -lh neon_pre_0011_backup_*.dump
 ```
 
-### Neon Point-in-Time Restore (PITR)
-Neon automatically maintains continuous write-ahead logs (WAL). In the Neon Console, you can create a branch from any timestamp in the last 7 days to recover from accidental deletions or migration mistakes.
+#### 2. Restore Instructions (in case of disaster or recovery)
+
+If migration failure occurs or data needs to be restored to the pre-migration state:
+
+```bash
+# Restore directly into Neon database using pg_restore
+pg_restore \
+  --dbname="$NEON_DATABASE_URL" \
+  --clean \
+  --if-exists \
+  --no-owner \
+  --no-privileges \
+  --verbose \
+  "neon_pre_0011_backup_YYYYMMDD_HHMMSS.dump"
+```
+
+#### 3. Neon Point-in-Time Restore (PITR) Alternative
+Neon maintains continuous write-ahead logs (WAL). In the [Neon Console](https://console.neon.tech/):
+1. Navigate to your project -> **Branches**.
+2. Click **New Branch**.
+3. Select **Point in Time** and pick the timestamp immediately prior to deployment (within the last 7 days).
+4. Point the Render `DATABASE_URL` environment variable to the new branch if instant rollback without `pg_restore` is preferred.
 
 ---
 

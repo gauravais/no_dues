@@ -3,6 +3,8 @@ from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel, EmailStr, Field
 from backend.app.models.user import UserRole
+from backend.app.schemas.common import DepartmentBrief
+
 
 
 class RosterUploadRowReport(BaseModel):
@@ -68,8 +70,13 @@ class AdminCreateUserRequest(BaseModel):
     )
     department_id: int | None = Field(
         None,
-        description="Assigned department ID (Mandatory for dept_officer and hod; academic only for hod)",
+        description="Assigned primary department ID (for backward compatibility)",
         examples=[4],
+    )
+    department_ids: list[int] | None = Field(
+        None,
+        description="Assigned department IDs (Mandatory for dept_officer and hod; academic only for hod)",
+        examples=[[4, 5]],
     )
     google_only: bool = Field(
         False,
@@ -86,12 +93,33 @@ class AdminUserResponse(BaseModel):
     role: str
     department_id: int | None
     department_name: str | None = None
+    departments: list[DepartmentBrief] = Field(default_factory=list)
     is_active: bool
     temporary_password: str | None = Field(
         None,
         description="One-time generated random temporary password (never returned again and never logged)",
         examples=["k9#dF2!zLp01"],
     )
+
+
+class AdminUserDetailResponse(BaseModel):
+    """Detailed user view for admin."""
+    id: int
+    email: str
+    full_name: str | None = None
+    role: str
+    department_id: int | None = None
+    department_name: str | None = None
+    departments: list[DepartmentBrief] = Field(default_factory=list)
+    is_active: bool
+    created_at: datetime
+    last_login_at: datetime | None = None
+
+
+class AddUserDepartmentRequest(BaseModel):
+    """Payload to add a department membership to an existing user."""
+    department_id: int = Field(..., description="Department ID to add to user memberships", examples=[5])
+
 
 
 class AdminResetPasswordResponse(BaseModel):
@@ -119,8 +147,10 @@ class AdminUserListItem(BaseModel):
     department: str | None = None
     department_name: str | None = None
     department_id: int | None = None
+    departments: list[DepartmentBrief] = Field(default_factory=list)
     is_active: bool
     created_at: datetime
+
 
 
 class AdminOfficeUserSummary(BaseModel):

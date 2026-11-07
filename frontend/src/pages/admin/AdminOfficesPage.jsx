@@ -141,6 +141,23 @@ export function AdminOfficesPage() {
     })
   }, [offices, kindFilter, missingFilter, searchTerm])
 
+  // Mapping of users to all their assigned offices across the university
+  const userOfficesMap = useMemo(() => {
+    const map = new Map()
+    offices.forEach((office) => {
+      ;(office.active_officers || []).forEach((u) => {
+        if (!map.has(u.id)) map.set(u.id, [])
+        map.get(u.id).push({ id: office.id, name: office.name })
+      })
+      if (office.hod) {
+        const u = office.hod
+        if (!map.has(u.id)) map.set(u.id, [])
+        map.get(u.id).push({ id: office.id, name: office.name })
+      }
+    })
+    return map
+  }, [offices])
+
   // Create User Mutation
   const createUserMutation = useMutation({
     mutationFn: (data) => adminApi.createStaffUser(data),
@@ -266,17 +283,33 @@ export function AdminOfficesPage() {
           }
 
           return (
-            <div className="space-y-1">
-              {officersList.map((off) => (
-                <div key={off.id} className="text-xs">
-                  <span className="font-medium text-zinc-900 block leading-tight">
-                    {off.name}
-                  </span>
-                  <span className="text-[11px] text-zinc-500 font-mono">
-                    {off.email}
-                  </span>
-                </div>
-              ))}
+            <div className="space-y-1.5">
+              {officersList.map((off) => {
+                const otherOffices = (userOfficesMap.get(off.id) || []).filter(
+                  (o) => o.id !== item.id
+                )
+                return (
+                  <div key={off.id} className="text-xs space-y-0.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-medium text-zinc-900 leading-tight">
+                        {off.name}
+                      </span>
+                      {otherOffices.length > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] px-1 py-0 bg-zinc-50 text-zinc-600 border-zinc-200 font-normal"
+                          title={`Also assigned to: ${otherOffices.map((o) => o.name).join(', ')}`}
+                        >
+                          +{otherOffices.length} other {otherOffices.length === 1 ? 'office' : 'offices'} ({otherOffices.map((o) => o.name).join(', ')})
+                        </Badge>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-zinc-500 font-mono block">
+                      {off.email}
+                    </span>
+                  </div>
+                )
+              })}
             </div>
           )
         },
@@ -302,12 +335,27 @@ export function AdminOfficesPage() {
             )
           }
 
+          const otherOffices = item.hod
+            ? (userOfficesMap.get(item.hod.id) || []).filter((o) => o.id !== item.id)
+            : []
+
           return (
-            <div className="text-xs">
-              <span className="font-semibold text-zinc-900 block leading-tight">
-                {item.hod.name}
-              </span>
-              <span className="text-[11px] text-zinc-500 font-mono">
+            <div className="text-xs space-y-0.5">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-semibold text-zinc-900 leading-tight">
+                  {item.hod.name}
+                </span>
+                {otherOffices.length > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] px-1 py-0 bg-zinc-50 text-zinc-600 border-zinc-200 font-normal"
+                    title={`Also assigned to: ${otherOffices.map((o) => o.name).join(', ')}`}
+                  >
+                    +{otherOffices.length} other {otherOffices.length === 1 ? 'dept' : 'depts'} ({otherOffices.map((o) => o.name).join(', ')})
+                  </Badge>
+                )}
+              </div>
+              <span className="text-[11px] text-zinc-500 font-mono block">
                 {item.hod.email}
               </span>
             </div>
@@ -362,7 +410,7 @@ export function AdminOfficesPage() {
         },
       },
     ],
-    []
+    [userOfficesMap]
   )
 
   return (

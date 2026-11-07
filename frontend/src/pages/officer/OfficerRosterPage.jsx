@@ -41,6 +41,15 @@ export function OfficerRosterPage() {
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(25)
 
+  // Multi-academic department support
+  const academicMemberships = useMemo(() => {
+    const depts = user?.departments || []
+    return depts.filter((d) => d.kind === 'academic')
+  }, [user?.departments])
+
+  const hasMultipleAcademic = academicMemberships.length > 1
+  const [selectedDeptId, setSelectedDeptId] = useState('ALL')
+
   // Dialog States
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
@@ -74,12 +83,13 @@ export function OfficerRosterPage() {
     isLoading,
     refetch,
   } = useQuery({
-    queryKey: ['department', 'roster', searchTerm, pageIndex, pageSize],
+    queryKey: ['department', 'roster', searchTerm, pageIndex, pageSize, selectedDeptId],
     queryFn: () =>
       departmentApi.getRoster({
         search: searchTerm.trim() || undefined,
         limit: pageSize,
         offset: pageIndex * pageSize,
+        departmentId: selectedDeptId === 'ALL' ? undefined : selectedDeptId,
       }),
   })
 
@@ -372,17 +382,36 @@ export function OfficerRosterPage() {
           {/* TAB 1: Roster List Table */}
           <TabsContent value="list" className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="relative w-full max-w-sm">
-                <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-2.5" />
-                <Input
-                  placeholder="Search name, registration #, or email..."
-                  value={searchTerm}
-                  onChange={(e) => {
-                    setSearchTerm(e.target.value)
-                    setPageIndex(0)
-                  }}
-                  className="pl-9 text-xs h-9 bg-white"
-                />
+              <div className="flex items-center gap-2 flex-1 max-w-xl">
+                <div className="relative w-full max-w-sm">
+                  <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-2.5" />
+                  <Input
+                    placeholder="Search name, registration #, or email..."
+                    value={searchTerm}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value)
+                      setPageIndex(0)
+                    }}
+                    className="pl-9 text-xs h-9 bg-white"
+                  />
+                </div>
+                {hasMultipleAcademic && (
+                  <select
+                    value={selectedDeptId}
+                    onChange={(e) => {
+                      setSelectedDeptId(e.target.value)
+                      setPageIndex(0)
+                    }}
+                    className="h-9 rounded-md border border-input bg-white px-2.5 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring shrink-0"
+                  >
+                    <option value="ALL">All Academic Depts</option>
+                    {academicMemberships.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <Button

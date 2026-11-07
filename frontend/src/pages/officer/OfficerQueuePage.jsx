@@ -39,10 +39,15 @@ export function OfficerQueuePage() {
   const { user } = useAuth()
 
   const [statusTab, setStatusTab] = useState('PENDING')
+  const [selectedOfficeId, setSelectedOfficeId] = useState('ALL')
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(25)
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  // Multi-department detection
+  const userOffices = useMemo(() => user?.departments || [], [user?.departments])
+  const hasMultipleOffices = userOffices.length > 1
 
   // Decision Modal State
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -71,13 +76,14 @@ export function OfficerQueuePage() {
     isRefetching,
     refetch,
   } = useQuery({
-    queryKey: ['department', 'queue', statusTab, pageIndex, pageSize, debouncedSearch],
+    queryKey: ['department', 'queue', statusTab, pageIndex, pageSize, debouncedSearch, selectedOfficeId],
     queryFn: async () => {
       return await departmentApi.getQueue({
         status: statusTab === 'ALL' ? undefined : statusTab,
         search: debouncedSearch.trim() || undefined,
         limit: pageSize,
         offset: pageIndex * pageSize,
+        departmentId: selectedOfficeId === 'ALL' ? undefined : selectedOfficeId,
       })
     },
   })
@@ -169,6 +175,22 @@ export function OfficerQueuePage() {
           )
         },
       },
+      ...(hasMultipleOffices
+        ? [
+            {
+              accessorKey: 'department_name',
+              header: 'Office',
+              cell: ({ row }) => (
+                <Badge
+                  variant="outline"
+                  className="text-[11px] font-medium bg-zinc-50 border-zinc-200 text-zinc-800"
+                >
+                  {row.original.department_name}
+                </Badge>
+              ),
+            },
+          ]
+        : []),
       {
         accessorKey: 'programme_name',
         header: 'Programme',
@@ -297,8 +319,23 @@ export function OfficerQueuePage() {
         },
       },
     ],
-    []
+    [hasMultipleOffices]
   )
+
+  const officeList = useMemo(() => {
+    const countsMap = new Map()
+    ;(queueResponse?.office_counts || []).forEach((c) => {
+      countsMap.set(c.department_id, c.pending)
+    })
+    return userOffices.map((off) => ({
+      ...off,
+      pending: countsMap.has(off.id) ? countsMap.get(off.id) : 0,
+    }))
+  }, [userOffices, queueResponse?.office_counts])
+
+  const totalPending = useMemo(() => {
+    return (queueResponse?.office_counts || []).reduce((acc, o) => acc + (o.pending || 0), 0)
+  }, [queueResponse?.office_counts])
 
   // Status Filter Tabs definition
   const statusTabsConfig = {
@@ -329,6 +366,15 @@ export function OfficerQueuePage() {
         </div>
         <StatusBadge status={item.status} />
       </div>
+
+      {hasMultipleOffices && (
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <span className="text-[11px] text-zinc-500 font-medium">Office:</span>
+          <Badge variant="outline" className="text-[10px] bg-zinc-50 text-zinc-800 border-zinc-200">
+            {item.department_name}
+          </Badge>
+        </div>
+      )}
 
       <div className="text-xs text-zinc-600 line-clamp-2">
         {item.programme_name}
@@ -411,14 +457,21 @@ export function OfficerQueuePage() {
                 <Building2 className="w-4 h-4" />
               </div>
               <h1 className="font-heading text-2xl sm:text-3xl font-extrabold tracking-tight text-zinc-950">
-                {user?.department_name ? `${user.department_name} Clearance Queue` : 'Department Clearance Queue'}
+                {hasMultipleOffices
+                  ? 'Department Clearance Queue'
+                  : user?.department_name
+                  ? `${user.department_name} Clearance Queue`
+                  : 'Department Clearance Queue'}
               </h1>
               {isRefetching && (
                 <RotateCw className="w-4 h-4 text-zinc-400 animate-spin" />
               )}
             </div>
             <p className="text-xs sm:text-sm text-zinc-500">
-              Department Officer: <span className="font-medium text-zinc-800">{user?.full_name || user?.email}</span> • Authenticated Department Reviewer
+              Department Officer: <span className="font-medium text-zinc-800">{user?.full_name || user?.email}</span>
+              {hasMultipleOffices && (
+                <span> • Managing {userOffices.length} assigned offices</span>
+              )} • Authenticated Department Reviewer
             </p>
           </div>
 
@@ -454,6 +507,65 @@ export function OfficerQueuePage() {
               <RotateCw className="w-3.5 h-3.5 mr-1.5" />
               Retry
             </Button>
+          </div>
+        )}
+
+        {/* Multi-Office Selector */}
+        {hasMultipleOffices && (
+          <div className="flex items-center gap-2 flex-wrap p-2.5 rounded-xl border border-border bg-zinc-50/70">
+            <span className="text-xs font-semibold text-zinc-600 mr-1">Offices:</span>
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedOfficeId('ALL')
+                setPageIndex(0)
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                selectedOfficeId === 'ALL'
+                  ? 'bg-zinc-950 text-white border-zinc-950 shadow-2xs'
+                  : 'bg-white text-zinc-700 border-border hover:bg-zinc-100'
+              }`}
+            >
+              All my offices
+              <span
+                className={`ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
+                  selectedOfficeId === 'ALL'
+                    ? 'bg-zinc-800 text-zinc-200'
+                    : 'bg-zinc-100 text-zinc-600'
+                }`}
+              >
+                {totalPending}
+              </span>
+            </button>
+            {officeList.map((off) => {
+              const isSelected = selectedOfficeId === String(off.id)
+              return (
+                <button
+                  key={off.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedOfficeId(String(off.id))
+                    setPageIndex(0)
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    isSelected
+                      ? 'bg-zinc-950 text-white border-zinc-950 shadow-2xs'
+                      : 'bg-white text-zinc-700 border-border hover:bg-zinc-100'
+                  }`}
+                >
+                  {off.name}
+                  <span
+                    className={`ml-1.5 px-1.5 py-0.5 rounded-full text-[10px] font-mono ${
+                      isSelected
+                        ? 'bg-zinc-800 text-zinc-200'
+                        : 'bg-zinc-100 text-zinc-600'
+                    }`}
+                  >
+                    {off.pending}
+                  </span>
+                </button>
+              )
+            })}
           </div>
         )}
 
@@ -519,6 +631,14 @@ export function OfficerQueuePage() {
                       <span>Resubmitted record (#{selectedItem.resubmission_count})</span>
                     </div>
                   )}
+                </div>
+
+                {/* Office Target Banner */}
+                <div className="p-2.5 rounded-lg bg-indigo-50/70 border border-indigo-200 text-xs flex items-center justify-between">
+                  <span className="text-indigo-900 font-medium text-[11px]">Deciding for:</span>
+                  <span className="font-bold text-indigo-950 text-xs">
+                    {selectedItem.department_name}
+                  </span>
                 </div>
 
                 {/* Conflict / Error Banner */}

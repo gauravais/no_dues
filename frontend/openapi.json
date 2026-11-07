@@ -1221,7 +1221,7 @@
           "Department Officer"
         ],
         "summary": "Get Department Clearance Queue",
-        "description": "Retrieves a paginated list of student clearance requests pending review or previously decided by the officer's assigned department. Returns student identity and programme (never bank details).",
+        "description": "Retrieves a paginated list of student clearance requests pending review or previously decided by the officer's assigned departments. Returns student identity and programme (never bank details).",
         "operationId": "get_department_clearance_queue",
         "security": [
           {
@@ -1229,6 +1229,24 @@
           }
         ],
         "parameters": [
+          {
+            "name": "department_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter queue to a specific assigned office",
+              "title": "Department Id"
+            },
+            "description": "Filter queue to a specific assigned office"
+          },
           {
             "name": "status",
             "in": "query",
@@ -1316,6 +1334,16 @@
           },
           "403": {
             "description": "Forbidden for non-officer roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Department not found among officer's assigned departments",
             "content": {
               "application/json": {
                 "schema": {
@@ -1891,6 +1919,24 @@
         ],
         "parameters": [
           {
+            "name": "department_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a specific academic department",
+              "title": "Department Id"
+            },
+            "description": "Filter to a specific academic department"
+          },
+          {
             "name": "search",
             "in": "query",
             "required": false,
@@ -1949,6 +1995,16 @@
           },
           "403": {
             "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Department not found among your academic departments",
             "content": {
               "application/json": {
                 "schema": {
@@ -2118,6 +2174,24 @@
         ],
         "parameters": [
           {
+            "name": "department_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to a specific academic department",
+              "title": "Department Id"
+            },
+            "description": "Filter to a specific academic department"
+          },
+          {
             "name": "is_active",
             "in": "query",
             "required": false,
@@ -2176,6 +2250,16 @@
           },
           "403": {
             "description": "Forbidden for service department officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Department not found among your academic departments",
             "content": {
               "application/json": {
                 "schema": {
@@ -3833,6 +3917,249 @@
         }
       }
     },
+    "/admin/users/{id}": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Get User Details",
+        "description": "Retrieves full user detail including all department memberships.",
+        "operationId": "get_admin_user_detail",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserDetailResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/departments": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Add Department Membership to User",
+        "description": "Adds a department membership to a user account. HoD accounts must remain academic-only. Audited.",
+        "operationId": "add_user_department_membership",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddUserDepartmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Department not found or non-academic for HoD",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users/{id}/departments/{department_id}": {
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Remove Department Membership from User",
+        "description": "Removes a department membership from a user. Refuses removing the last department of a dept_officer or hod (409). Promotes another department to primary if primary is removed. Audited.",
+        "operationId": "remove_user_department_membership",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "department_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Department Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserDetailResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User or department membership not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Cannot remove last department; deactivate the user instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/users/{id}/active": {
       "patch": {
         "tags": [
@@ -4509,13 +4836,35 @@
         ]
       }
     },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Application Process Liveness Probe",
+        "description": "Lightweight process liveness probe for cloud platform orchestrators (e.g. Render health checks). Never queries the database, allowing serverless databases (Neon) to suspend when idle.",
+        "operationId": "health_live_health_live_get",
+        "responses": {
+          "200": {
+            "description": "Application process is alive and accepting traffic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveHealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
           "Health"
         ],
         "summary": "System and Database Health Check",
-        "description": "Performs a live connectivity probe against the PostgreSQL database. Returns 200 OK with connected status, or 503 Service Unavailable if unreachable.",
+        "description": "Performs a live connectivity probe against the PostgreSQL database. Returns 200 OK with connected status, or 503 Service Unavailable if unreachable. IMPORTANT: Do NOT poll this endpoint with automated health monitors or cron jobs around the clock, as doing so prevents serverless databases (e.g. Neon) from suspending idle compute.",
         "operationId": "health_check_health_get",
         "responses": {
           "200": {
@@ -4591,6 +4940,24 @@
         "title": "AddOfficeRequest",
         "description": "Payload for staff to add an office to an active clearance request."
       },
+      "AddUserDepartmentRequest": {
+        "properties": {
+          "department_id": {
+            "type": "integer",
+            "title": "Department Id",
+            "description": "Department ID to add to user memberships",
+            "examples": [
+              5
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "department_id"
+        ],
+        "title": "AddUserDepartmentRequest",
+        "description": "Payload to add a department membership to an existing user."
+      },
       "AdminCreateUserRequest": {
         "properties": {
           "email": {
@@ -4629,9 +4996,30 @@
               }
             ],
             "title": "Department Id",
-            "description": "Assigned department ID (Mandatory for dept_officer and hod; academic only for hod)",
+            "description": "Assigned primary department ID (for backward compatibility)",
             "examples": [
               4
+            ]
+          },
+          "department_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Ids",
+            "description": "Assigned department IDs (Mandatory for dept_officer and hod; academic only for hod)",
+            "examples": [
+              [
+                4,
+                5
+              ]
             ]
           },
           "google_only": {
@@ -4898,6 +5286,93 @@
         "title": "AdminUserBulkUploadResponse",
         "description": "Aggregate response for admin bulk user upload."
       },
+      "AdminUserDetailResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Id"
+          },
+          "department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Name"
+          },
+          "departments": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentBrief"
+            },
+            "type": "array",
+            "title": "Departments"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_login_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "role",
+          "is_active",
+          "created_at"
+        ],
+        "title": "AdminUserDetailResponse",
+        "description": "Detailed user view for admin."
+      },
       "AdminUserListItem": {
         "properties": {
           "id": {
@@ -4955,6 +5430,13 @@
               }
             ],
             "title": "Department Id"
+          },
+          "departments": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentBrief"
+            },
+            "type": "array",
+            "title": "Departments"
           },
           "is_active": {
             "type": "boolean",
@@ -5023,6 +5505,13 @@
               }
             ],
             "title": "Department Name"
+          },
+          "departments": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentBrief"
+            },
+            "type": "array",
+            "title": "Departments"
           },
           "is_active": {
             "type": "boolean",
@@ -5779,6 +6268,42 @@
         "title": "DepartmentApprovalItem",
         "description": "Detailed approval status for an applicable university department."
       },
+      "DepartmentBrief": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "Department ID",
+            "examples": [
+              1
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Department name",
+            "examples": [
+              "Skill Department of CS/IT"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Department kind: academic or service",
+            "examples": [
+              "academic"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "title": "DepartmentBrief",
+        "description": "Brief metadata for a department membership."
+      },
       "DepartmentQueueItem": {
         "properties": {
           "approval_id": {
@@ -5795,6 +6320,22 @@
             "description": "Parent clearance request ID",
             "examples": [
               1
+            ]
+          },
+          "department_id": {
+            "type": "integer",
+            "title": "Department Id",
+            "description": "Department ID of this approval",
+            "examples": [
+              4
+            ]
+          },
+          "department_name": {
+            "type": "string",
+            "title": "Department Name",
+            "description": "Department name of this approval",
+            "examples": [
+              "Central Library"
             ]
           },
           "student_name": {
@@ -5890,6 +6431,8 @@
         "required": [
           "approval_id",
           "request_id",
+          "department_id",
+          "department_name",
           "student_name",
           "registration_number",
           "programme_name",
@@ -5933,6 +6476,14 @@
             "examples": [
               0
             ]
+          },
+          "office_counts": {
+            "items": {
+              "$ref": "#/components/schemas/OfficePendingCount"
+            },
+            "type": "array",
+            "title": "Office Counts",
+            "description": "Pending clearance counts across officer's assigned offices"
           }
         },
         "type": "object",
@@ -6851,6 +7402,32 @@
         "title": "LabCourseUploadRowReport",
         "description": "Result per processed CSV row in lab course upload."
       },
+      "LiveHealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Process liveness status",
+            "default": "ok",
+            "examples": [
+              "ok"
+            ]
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment",
+            "description": "Runtime environment name",
+            "examples": [
+              "production"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "environment"
+        ],
+        "title": "LiveHealthResponse"
+      },
       "MarkRefundProcessedRequest": {
         "properties": {
           "payment_reference": {
@@ -6913,6 +7490,42 @@
         ],
         "title": "MarkRefundProcessedResponse",
         "description": "Response after marking refund as processed."
+      },
+      "OfficePendingCount": {
+        "properties": {
+          "department_id": {
+            "type": "integer",
+            "title": "Department Id",
+            "description": "Office department ID",
+            "examples": [
+              4
+            ]
+          },
+          "department_name": {
+            "type": "string",
+            "title": "Department Name",
+            "description": "Office department name",
+            "examples": [
+              "Central Library"
+            ]
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending",
+            "description": "Count of pending approvals in this office",
+            "examples": [
+              2
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "department_id",
+          "department_name",
+          "pending"
+        ],
+        "title": "OfficePendingCount",
+        "description": "Pending count for a single office belonging to an officer."
       },
       "PublicVerificationResponse": {
         "properties": {
@@ -8097,6 +8710,14 @@
             "examples": [
               "Skill Department of CS/IT"
             ]
+          },
+          "departments": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentBrief"
+            },
+            "type": "array",
+            "title": "Departments",
+            "description": "All department memberships for the user"
           },
           "must_change_password": {
             "type": "boolean",
