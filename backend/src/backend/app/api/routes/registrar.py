@@ -4,7 +4,7 @@ import io
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import joinedload
 
@@ -18,12 +18,16 @@ from backend.app.models.audit import AuditLog
 from backend.app.schemas.common import ErrorResponse, MessageResponse
 from backend.app.schemas.workflow import DepartmentApprovalItem
 from backend.app.schemas.registrar import (
+    DepositLedgerRowReport,
+    DepositLedgerUploadResponse,
     PaymentMode,
     RegistrarQueueResponse,
     RegistrarQueueItem,
     RegistrarQueueCounts,
     RegistrarRequestDetailResponse,
     RevealBankDetailsResponse,
+    UpdateRosterDepositRequest,
+    UpdateRosterDepositResponse,
     VerifyRefundRequest,
     VerifyRefundResponse,
     ReopenVerificationRequest,
@@ -226,6 +230,7 @@ def get_registrar_queue(
         r = req.roster_entry
         prog_name = r.programme.name if (r and r.programme) else "N/A"
         dep_amt = req.refund.deposit_amount if req.refund else (r.security_deposit_amount if r else Decimal("0.00"))
+        ledger_amt = r.security_deposit_amount if (r and r.security_deposit_amount and r.security_deposit_amount > 0) else None
         cleared_date = req.certificate.issued_at if req.certificate else req.updated_at
         refund_st = req.refund.status.value if req.refund else "N/A"
         deductions = req.refund.deductions if req.refund else None
@@ -235,10 +240,12 @@ def get_registrar_queue(
         items.append(
             RegistrarQueueItem(
                 request_id=req.id,
+                roster_id=req.roster_id,
                 student_name=r.name if r else "N/A",
                 registration_number=r.registration_number if r else "N/A",
                 programme=prog_name,
                 deposit_amount=dep_amt,
+                ledger_deposit_amount=ledger_amt,
                 deductions=deductions,
                 final_amount=final_amt,
                 cleared_date=cleared_date,
@@ -313,14 +320,15 @@ def verify_refund(
             detail=f"Refund verification allowed only when refund status is PENDING_VERIFICATION. Current: {refund.status.value}",
         )
 
-    target_deposit = body.deposit_amount if body.deposit_amount is not None else refund.deposit_amount
+    target_deposit = (body.deposit_amount if body.deposit_amount is not None else refund.deposit_amount).quantize(Decimal("0.01"))
     if target_deposit < 0:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Deposit amount cannot be negative.",
         )
 
-    if body.deductions < 0 or body.deductions > target_deposit:
+    deductions_amt = body.deductions.quantize(Decimal("0.01"))
+    if deductions_amt < 0 or deductions_amt > target_deposit:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Deductions must be between 0 and total deposit amount ({target_deposit}). Received: {body.deductions}",
@@ -339,11 +347,11 @@ def verify_refund(
         )
 
     now = datetime.now(timezone.utc)
-    final_amt = target_deposit - body.deductions
+    final_amt = target_deposit - deductions_amt
 
     # 3. Update records
     refund.deposit_amount = target_deposit
-    refund.deductions = body.deductions
+    refund.deductions = deductions_amt
     refund.final_amount = final_amt
     refund.remarks = clean_remarks
     refund.accounts_note = clean_remarks
@@ -356,17 +364,28 @@ def verify_refund(
     req.updated_at = now
 
     # 4. Audit Log
+    audit_details = {
+        "deposit_amount": f"{refund.deposit_amount:.2f}",
+        "deductions": f"{refund.deductions:.2f}",
+        "final_amount": f"{final_amt:.2f}",
+        "remarks": clean_remarks,
+    }
+    roster_entry = db.scalar(select(StudentRoster).where(StudentRoster.id == req.roster_id)) if req.roster_id else None
+    ledger_val = roster_entry.security_deposit_amount if roster_entry else None
+    if ledger_val is not None and ledger_val > 0:
+        audit_details["ledger_deposit_amount"] = f"{ledger_val:.2f}"
+        if target_deposit != ledger_val:
+            audit_details["deposit_differs_from_ledger"] = True
+    elif ledger_val is not None and target_deposit != ledger_val:
+        audit_details["ledger_deposit_amount"] = f"{ledger_val:.2f}"
+        audit_details["deposit_differs_from_ledger"] = True
+
     audit = AuditLog(
         user_id=current_user.id,
         action="VERIFY_REFUND",
         entity_type="clearance_requests",
         entity_id=req.id,
-        details={
-            "deposit_amount": str(refund.deposit_amount),
-            "deductions": str(refund.deductions),
-            "final_amount": str(final_amt),
-            "remarks": clean_remarks,
-        },
+        details=audit_details,
         created_at=now,
     )
     db.add(audit)
@@ -836,8 +855,11 @@ def get_registrar_request_detail(
     if ref and ref.paid_by_user:
         paid_by_name = ref.paid_by_user.full_name or ref.paid_by_user.email
 
+    ledger_amt = r.security_deposit_amount if (r and r.security_deposit_amount and r.security_deposit_amount > 0) else None
+
     return RegistrarRequestDetailResponse(
         request_id=req.id,
+        roster_id=req.roster_id,
         status=req.status.value,
         student_name=r.name if r else "Unknown",
         registration_number=r.registration_number if r else "Unknown",
@@ -850,6 +872,7 @@ def get_registrar_request_detail(
         account_holder_name=bank.account_holder_name if bank else "N/A",
         bank_address=bank.bank_address if bank else "N/A",
         deposit_amount=deposit_amt,
+        ledger_deposit_amount=ledger_amt,
         deductions=deductions,
         final_amount=final_amt,
         refund_status=refund_st,
@@ -1080,3 +1103,297 @@ def reveal_student_bank_details(
         ifsc_code=bank.ifsc_code,
         bank_address=bank.bank_address,
     )
+
+
+# ----------------------------------------------------------------------
+# Deposit Ledger Endpoints
+# ----------------------------------------------------------------------
+
+@router.get(
+    "/deposit-ledger/template.csv",
+    status_code=status.HTTP_200_OK,
+    operation_id="get_deposit_ledger_template",
+    summary="Download Deposit Ledger CSV Template",
+    description="Downloads a CSV template formatted for security deposit ledger upload with sample data.",
+    responses={
+        200: {"content": {"text/csv": {}}, "description": "Deposit ledger CSV template"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+    },
+)
+def get_deposit_ledger_template(
+    current_user: User = Depends(require_registrar),
+) -> Response:
+    content = "registration_number,deposit_amount\r\n2026SVSU0001,5000.00\r\n"
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="deposit_ledger_template.csv"'},
+    )
+
+
+@router.post(
+    "/deposit-ledger/upload",
+    response_model=DepositLedgerUploadResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="upload_deposit_ledger_csv",
+    summary="Bulk Upload Security Deposit Ledger from CSV",
+    description=(
+        "Uploads a CSV to set or update student_roster.security_deposit_amount (the ledger value) for students "
+        "whose refund has not yet been verified or processed. Supports dry-run simulation."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid CSV file or format"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+    },
+)
+async def upload_deposit_ledger_csv(
+    db: SessionDep,
+    file: UploadFile = File(..., description="CSV file with registration_number and deposit_amount"),
+    dry_run: bool = Query(False, description="Simulate upload without persisting changes"),
+    current_user: User = Depends(require_registrar),
+) -> DepositLedgerUploadResponse:
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to decode CSV file as text")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file is empty or missing header row")
+
+    fieldnames_map = {f.strip().lower(): f for f in reader.fieldnames if f}
+    if "registration_number" not in fieldnames_map or "deposit_amount" not in fieldnames_map:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="CSV header must contain 'registration_number' and 'deposit_amount' columns",
+        )
+
+    rows = list(reader)
+    if not rows:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="CSV file contains no data rows")
+
+    row_reports: list[DepositLedgerRowReport] = []
+    updated_count = 0
+    unchanged_count = 0
+    rejected_count = 0
+
+    for idx, row in enumerate(rows, start=1):
+        reg_num = (row.get(fieldnames_map["registration_number"]) or "").strip()
+        dep_str = (row.get(fieldnames_map["deposit_amount"]) or "").strip()
+
+        if not reg_num:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number="UNKNOWN",
+                status="rejected",
+                reason="Registration number cannot be empty",
+            ))
+            rejected_count += 1
+            continue
+
+        try:
+            parsed_amt = Decimal(dep_str)
+        except Exception:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="rejected",
+                reason=f"Invalid deposit amount '{dep_str}'. Must be a valid decimal number.",
+            ))
+            rejected_count += 1
+            continue
+
+        if parsed_amt < Decimal("0.00"):
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="rejected",
+                reason="Deposit amount cannot be negative",
+            ))
+            rejected_count += 1
+            continue
+
+        if parsed_amt > Decimal("99999999.99"):
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="rejected",
+                reason="Deposit amount exceeds maximum limit of 99,999,999.99",
+            ))
+            rejected_count += 1
+            continue
+
+        if parsed_amt.as_tuple().exponent < -2:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="rejected",
+                reason="Deposit amount cannot have more than 2 decimal places",
+            ))
+            rejected_count += 1
+            continue
+
+        student = db.scalar(select(StudentRoster).where(StudentRoster.registration_number == reg_num))
+        if not student:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="rejected",
+                reason="Student registration number not found in roster",
+            ))
+            rejected_count += 1
+            continue
+
+        verified_refund = db.scalar(
+            select(Refund)
+            .join(ClearanceRequest, Refund.request_id == ClearanceRequest.id)
+            .where(
+                ClearanceRequest.roster_id == student.id,
+                Refund.status.in_([RefundStatus.VERIFIED, RefundStatus.PROCESSED]),
+            )
+        )
+        if verified_refund:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="rejected",
+                old_amount=student.security_deposit_amount,
+                reason=f"Cannot update deposit ledger: student refund is already {verified_refund.status.value}",
+            ))
+            rejected_count += 1
+            continue
+
+        old_val = student.security_deposit_amount or Decimal("0.00")
+        if old_val == parsed_amt:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="unchanged",
+                old_amount=old_val,
+                new_amount=parsed_amt,
+                reason="Deposit amount matches existing ledger value",
+            ))
+            unchanged_count += 1
+        else:
+            row_reports.append(DepositLedgerRowReport(
+                row_number=idx,
+                registration_number=reg_num,
+                status="updated",
+                old_amount=old_val,
+                new_amount=parsed_amt,
+            ))
+            updated_count += 1
+            if not dry_run:
+                student.security_deposit_amount = parsed_amt
+                student.updated_by_user_id = current_user.id
+
+    now = datetime.now(timezone.utc)
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="DEPOSIT_LEDGER_UPLOAD",
+        entity_type="deposit_ledger",
+        entity_id=None,
+        details={
+            "dry_run": dry_run,
+            "filename": file.filename,
+            "total_rows": len(rows),
+            "updated_count": updated_count,
+            "unchanged_count": unchanged_count,
+            "rejected_count": rejected_count,
+        },
+        created_at=now,
+    )
+    db.add(audit)
+    if not dry_run:
+        db.commit()
+
+    return DepositLedgerUploadResponse(
+        dry_run=dry_run,
+        total_rows=len(rows),
+        updated_count=updated_count,
+        unchanged_count=unchanged_count,
+        rejected_count=rejected_count,
+        rows=row_reports,
+    )
+
+
+@router.patch(
+    "/roster/{id}/deposit",
+    response_model=UpdateRosterDepositResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="update_roster_student_deposit",
+    summary="Update Single Student Security Deposit Ledger Amount",
+    description="Updates the security deposit ledger amount for a student in the roster whose refund is not yet verified or processed.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid deposit amount"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+        404: {"model": ErrorResponse, "description": "Student roster entry not found"},
+        409: {"model": ErrorResponse, "description": "Student refund is already verified or processed"},
+    },
+)
+def update_roster_student_deposit(
+    id: int,
+    body: UpdateRosterDepositRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_registrar),
+) -> UpdateRosterDepositResponse:
+    student = db.scalar(select(StudentRoster).where(StudentRoster.id == id))
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Student roster entry with id {id} not found.",
+        )
+
+    if body.deposit_amount.as_tuple().exponent < -2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Deposit amount cannot have more than 2 decimal places.",
+        )
+
+    verified_refund = db.scalar(
+        select(Refund)
+        .join(ClearanceRequest, Refund.request_id == ClearanceRequest.id)
+        .where(
+            ClearanceRequest.roster_id == student.id,
+            Refund.status.in_([RefundStatus.VERIFIED, RefundStatus.PROCESSED]),
+        )
+    )
+    if verified_refund:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot update deposit ledger: student refund is already {verified_refund.status.value}.",
+        )
+
+    old_amount = student.security_deposit_amount
+    new_deposit = body.deposit_amount.quantize(Decimal("0.01"))
+    student.security_deposit_amount = new_deposit
+    student.updated_by_user_id = current_user.id
+
+    now = datetime.now(timezone.utc)
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="UPDATE_ROSTER_DEPOSIT",
+        entity_type="student_roster",
+        entity_id=student.id,
+        details={
+            "registration_number": student.registration_number,
+            "old_amount": f"{old_amount:.2f}" if old_amount is not None else None,
+            "new_amount": f"{new_deposit:.2f}",
+        },
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return UpdateRosterDepositResponse(
+        id=student.id,
+        registration_number=student.registration_number,
+        name=student.name,
+        security_deposit_amount=student.security_deposit_amount,
+        message="Deposit ledger amount updated successfully.",
+    )
+

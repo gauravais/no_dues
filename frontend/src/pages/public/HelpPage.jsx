@@ -263,7 +263,7 @@ export function HelpPage() {
               <h3 className="font-semibold text-zinc-900 mb-1.5 text-xs">For Accounts & Finance Officers</h3>
               <ul className="list-disc list-inside space-y-1 text-zinc-600 pl-1">
                 <li>
-                  <strong>Verification Queue:</strong> Review requests awaiting deposit reconciliation under "To verify", confirm security deposit amounts, assess any dues or deductions, and record remarks.
+                  <strong>Verification Queue:</strong> Review requests awaiting deposit reconciliation under "To verify". Enter the deposit from the ledger or receipt, then deductions, and record audit remarks.
                 </li>
                 <li>
                   <strong>Bank Disbursement:</strong> View student beneficiary details using the audited reveal tool prior to payment, initiate bank disbursement, and record the payment reference and payment mode under "To pay".

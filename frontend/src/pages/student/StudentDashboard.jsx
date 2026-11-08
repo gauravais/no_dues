@@ -774,13 +774,13 @@ export function StudentDashboard() {
                         <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
                           <span className="text-[11px] text-zinc-500 block">Original Deposit</span>
                           <span className="text-sm font-bold font-mono text-zinc-900">
-                            ₹{Number(currentRequest.deposit_amount).toLocaleString('en-IN')}
+                            ₹{Number(currentRequest.deposit_amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         </div>
                         <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
                           <span className="text-[11px] text-zinc-500 block">Deductions Applied</span>
                           <span className="text-sm font-bold font-mono text-rose-600">
-                            -₹{Number(currentRequest.deductions || 0).toLocaleString('en-IN')}
+                            -₹{Number(currentRequest.deductions || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         </div>
                         <div className="p-3 rounded-lg bg-emerald-50/60 border border-emerald-200">
@@ -789,7 +789,7 @@ export function StudentDashboard() {
                             ₹{Number(
                               currentRequest.final_amount ??
                               (Number(currentRequest.deposit_amount) - Number(currentRequest.deductions || 0))
-                            ).toLocaleString('en-IN')}
+                            ).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </span>
                         </div>
                       </div>

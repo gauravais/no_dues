@@ -497,16 +497,32 @@ The frontend completes the full post-clearance security deposit refund lifecycle
 - **One-Time Refund Guarantee**:
   - The Apply button stays hidden whenever the student has a non-cancelled request, with the explanation: *"Your deposit can be refunded once."*
 
-### B. Accounts (Registrar) Refund Queue (`RegistrarRefundPage.jsx`)
+### B. Accounts (Registrar) Refund Queue & Deposit Ledger (`RegistrarRefundPage.jsx`)
+- **Security Deposit Ledger Section**:
+  - *Download template CSV*: Downloads `deposit_ledger_template.csv` formatted with `registration_number,deposit_amount`.
+  - *Upload ledger (CSV)*: Supports drag-and-drop CSV upload with two actions: *"Check file (Dry run)"* which previews changes without updating the database, and *"Upload ledger"* which saves changes to the student roster.
+  - *Row-by-Row Report Table*: Displays status (updated, unchanged, rejected), old amount, new amount, and rejection reasons (e.g. invalid format, student not found, or student refund already verified/processed).
+  - *Update Single Student Deposit*: Modal allowing the Accounts officer to update a student's security deposit directly in the ledger (`PATCH /registrar/roster/{id}/deposit`).
 - **Lifecycle Tabs & Counts**: Features tabs for `To verify` (`TO_VERIFY`), `To pay` (`TO_PAY`), `Paid` (`PAID`), `Failed` (`FAILED`), and `All` (`ALL`), each displaying live counts.
 - **Financial Summary Strip**: Highlights pending disbursement totals (`total_to_pay_amount` across `TO_PAY` items) and completed payouts (`total_paid_amount` across `PAID` items).
+- **Amounts Display Pre-Verification**: In the queue table and mobile cards, deposit, deductions, and net refund show as `"—"` until the refund is verified (never defaulting to ₹0.00). When `ledger_deposit_amount` is set, the deposit column indicates the official ledger value with a *"From ledger"* badge.
+- **Verify Dialog Input & Pre-fill**:
+  - Required field: *"Security deposit paid by the student (₹)"* (number, step 0.01, min 0, max 99,999,999.99, at most 2 decimal places).
+  - Pre-fill rule: When `ledger_deposit_amount` is present and $>0$, the deposit input is pre-filled with this value, accompanied by the notice: *"From the deposit ledger. Confirm or correct it."* Otherwise, if `deposit_amount > 0` is set from earlier drafts it is used; otherwise left empty so the officer must enter the figure from ledger/receipt (never pre-filling 0 or hardcoded figures).
+  - Help text: *"Enter the amount from the university's deposit receipt or ledger. It is not stored anywhere else."* (shown when not pre-filled from ledger).
+  - Zero-deposit safeguard: If entered as 0, requires ticking *"This student has no deposit to refund"* before Verify becomes enabled.
+  - Deductions validation: Must be between 0 and deposit, at most 2 decimals.
+  - Zero net warning: Prominent warning whenever net refund is ₹0.00.
+  - Confirmation step: Shows summary *"You are confirming: deposit ₹X, deductions ₹Y, net refund ₹Z. The student will see these amounts."* before submission.
 - **Discrepancy Indicator**: Displays a *"Student reported a problem"* alert badge whenever `item.student_issue_open` is true.
 - **Masked CSV Export**: *"Export list (CSV)"* downloads a filtered CSV report of the currently selected tab, with a security note that account numbers in exports remain masked.
 
 ### C. Accounts Request Audit & Disbursement Detail (`RegistrarRequestDetailPage.jsx`)
 - **Lifecycle Stepper**: Displays the 4-stage lifecycle at the top of the detail page.
+- **Financial Strip Pre-Verification**: Security deposit amount, assessed deductions, and net reimbursable refund display as `"—"` until Accounts verification is completed. When a ledger deposit exists, it is displayed with `(Ledger)`.
 - **Strict State-Governed Actions**:
-  - *When PENDING_VERIFICATION*: "Verify Refund Calculation" (deposit amount, deductions, remarks/accounts note, live net preview).
+  - *When PENDING_VERIFICATION*: "Verify Refund Calculation" dialog with exact same validation rules: pre-fills with `ledger_deposit_amount` labelled *"From the deposit ledger. Confirm or correct it."*, zero-deposit confirmation checkbox, 2-decimal constraint, deductions between 0 and deposit, zero net refund warning, live calculation breakdown in `en-IN` currency format with 2 decimals, and confirmation summary dialog.
+  - *When Reopened & Verifying Again*: Pre-fills previously verified values so the officer can correct them.
   - *When VERIFIED*: "Mark as Paid" (validated 6–40 alphanumeric/hyphen/underscore reference, paid date, payment mode), "Reopen Verification" (mandatory reason), and "Mark as Failed" (mandatory reason).
   - *When PAYMENT_FAILED*: "Retry Payment" (resets to `VERIFIED`) and "Mark as Failed".
   - *When PROCESSED*: "Mark as Failed" (for payment bounces or reversals).

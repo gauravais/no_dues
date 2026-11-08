@@ -17,6 +17,7 @@ class PaymentMode(str, enum.Enum):
 class RegistrarQueueItem(BaseModel):
     """Clearance record waiting for refund processing."""
     request_id: int = Field(..., description="Unique clearance request ID", examples=[1])
+    roster_id: int | None = Field(None, description="Student roster entry ID", examples=[1])
     student_name: str = Field(..., description="Student full name", examples=["Arjun Mehta"])
     registration_number: str = Field(..., description="Student registration number", examples=["DEMO2026001"])
     programme: str = Field(..., description="Enrolled degree programme", examples=["B.Tech Computer Engineering"])
@@ -27,6 +28,11 @@ class RegistrarQueueItem(BaseModel):
     status: str = Field(..., description="Clearance request status", examples=["CLEARED"])
     refund_status: str = Field(..., description="Refund record status", examples=["PENDING_VERIFICATION"])
     student_issue_open: bool = Field(False, description="True if student has an open unresolved refund issue")
+    ledger_deposit_amount: Decimal | None = Field(
+        None,
+        description="Official security deposit amount in deposit ledger (null if 0 or unset)",
+        examples=[Decimal("5000.00")],
+    )
 
 
 class RegistrarQueueCounts(BaseModel):
@@ -95,6 +101,7 @@ class ReopenVerificationRequest(BaseModel):
 class RegistrarRequestDetailResponse(BaseModel):
     """Full request details for registrar review with roster provenance and complete refund timeline."""
     request_id: int = Field(..., description="Clearance request ID", examples=[1])
+    roster_id: int | None = Field(None, description="Student roster entry ID", examples=[1])
     status: str = Field(..., description="Clearance request status", examples=["CLEARED"])
     student_name: str = Field(..., description="Student full name", examples=["Arjun Mehta"])
     registration_number: str = Field(..., description="Student registration number", examples=["DEMO2026001"])
@@ -107,6 +114,11 @@ class RegistrarRequestDetailResponse(BaseModel):
     account_holder_name: str = Field(..., description="Bank account holder name", examples=["Arjun Mehta"])
     bank_address: str = Field(..., description="Bank branch address", examples=["Campus Branch, Gurugram"])
     deposit_amount: Decimal = Field(..., description="Security deposit amount", examples=[Decimal("5000.00")])
+    ledger_deposit_amount: Decimal | None = Field(
+        None,
+        description="Official security deposit amount in deposit ledger (null if 0 or unset)",
+        examples=[Decimal("5000.00")],
+    )
     deductions: Decimal | None = Field(None, description="Approved deductions if verified", examples=[Decimal("250.00")])
     final_amount: Decimal | None = Field(None, description="Final refund amount if verified", examples=[Decimal("4750.00")])
     refund_status: str = Field(..., description="Refund record status", examples=["PENDING_VERIFICATION"])
@@ -184,4 +196,44 @@ class ResolveStudentIssueRequest(BaseModel):
         description="Resolution note by registrar",
         examples=["Contacted student bank branch, reference verified"],
     )
+
+
+class DepositLedgerRowReport(BaseModel):
+    """Row processing result for deposit ledger CSV upload."""
+    row_number: int = Field(..., description="Row number in uploaded CSV (1-indexed, excluding header)", examples=[1])
+    registration_number: str = Field(..., description="Student registration number", examples=["2026SVSU0001"])
+    status: str = Field(..., description="Processing status: updated, unchanged, or rejected", examples=["updated"])
+    old_amount: Decimal | None = Field(None, description="Previous ledger deposit amount", examples=[Decimal("0.00")])
+    new_amount: Decimal | None = Field(None, description="New ledger deposit amount if accepted", examples=[Decimal("5000.00")])
+    reason: str | None = Field(None, description="Rejection reason if status is rejected", examples=["Student registration number not found in roster"])
+
+
+class DepositLedgerUploadResponse(BaseModel):
+    """Overall summary and row-by-row report for deposit ledger CSV upload."""
+    dry_run: bool = Field(..., description="Whether this was a dry-run preview execution", examples=[False])
+    total_rows: int = Field(..., description="Total rows parsed in CSV", examples=[10])
+    updated_count: int = Field(..., description="Count of successfully updated/created ledger entries", examples=[8])
+    unchanged_count: int = Field(0, description="Count of unchanged rows where deposit matches existing ledger", examples=[0])
+    rejected_count: int = Field(..., description="Count of rejected rows", examples=[2])
+    rows: list[DepositLedgerRowReport] = Field(..., description="Row-by-row upload results")
+
+
+class UpdateRosterDepositRequest(BaseModel):
+    """Payload to update single student's security deposit ledger amount."""
+    deposit_amount: Decimal = Field(
+        ...,
+        ge=Decimal("0.00"),
+        le=Decimal("99999999.99"),
+        description="Security deposit amount in INR (0 to 99999999.99, max 2 decimals)",
+        examples=[Decimal("5000.00")],
+    )
+
+
+class UpdateRosterDepositResponse(BaseModel):
+    """Result of updating single student's security deposit ledger amount."""
+    id: int = Field(..., description="Roster ID", examples=[1])
+    registration_number: str = Field(..., description="Student registration number", examples=["2026SVSU0001"])
+    name: str = Field(..., description="Student full name", examples=["Arjun Mehta"])
+    security_deposit_amount: Decimal = Field(..., description="Updated security deposit amount in ledger", examples=[Decimal("5000.00")])
+    message: str = Field(default="Deposit ledger amount updated successfully.")
 

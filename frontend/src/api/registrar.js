@@ -143,4 +143,45 @@ export const registrarApi = {
     const response = await api.post(`/registrar/requests/${requestId}/reveal-bank-details`)
     return response.data
   },
+
+  /**
+   * Download deposit ledger CSV template
+   */
+  async getDepositLedgerTemplate() {
+    const response = await api.get('/registrar/deposit-ledger/template.csv', {
+      responseType: 'blob',
+    })
+    return response.data
+  },
+
+  /**
+   * Bulk upload security deposit ledger CSV
+   * @param {File} file
+   * @param {Object} [options]
+   * @param {boolean} [options.dry_run=false]
+   */
+  async uploadDepositLedger(file, { dry_run = false } = {}) {
+    const formData = new FormData()
+    formData.append('file', file)
+    const response = await api.post('/registrar/deposit-ledger/upload', formData, {
+      params: { dry_run },
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+    return response.data
+  },
+
+  /**
+   * Update single student security deposit ledger amount
+   * @param {number} rosterId
+   * @param {Object} data
+   * @param {number|string} data.deposit_amount
+   */
+  async updateRosterDeposit(rosterId, { deposit_amount }) {
+    const response = await api.patch(`/registrar/roster/${rosterId}/deposit`, {
+      deposit_amount: Number(deposit_amount),
+    })
+    return response.data
+  },
 }

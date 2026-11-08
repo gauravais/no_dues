@@ -63,8 +63,17 @@ export function RegistrarRequestDetailPage() {
   const [confirmVerifyOpen, setConfirmVerifyOpen] = useState(false)
   const [depositInput, setDepositInput] = useState('')
   const [deductionsInput, setDeductionsInput] = useState('0')
+  const [noDepositChecked, setNoDepositChecked] = useState(false)
   const [verifyRemarks, setVerifyRemarks] = useState('')
   const [verifyError, setVerifyError] = useState('')
+
+  const formatInr = (val) => {
+    const num = Number(val)
+    if (isNaN(num)) return '₹0.00'
+    return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+  }
+
+  const isValidDecimal = (val) => /^\d+(\.\d{1,2})?$/.test(val.trim())
 
   // Mark Processed Dialog & Form State
   const [processModalOpen, setProcessModalOpen] = useState(false)
@@ -247,38 +256,72 @@ export function RegistrarRequestDetailPage() {
   })
 
   const handleOpenVerifyModal = () => {
-    setDepositInput(detail?.deposit_amount || '5000.00')
-    setDeductionsInput(detail?.deductions != null ? String(detail.deductions) : '0')
-    setVerifyRemarks('')
+    const ledgerVal =
+      detail?.ledger_deposit_amount && Number(detail.ledger_deposit_amount) > 0
+        ? String(detail.ledger_deposit_amount)
+        : detail?.deposit_amount && Number(detail.deposit_amount) > 0
+        ? String(detail.deposit_amount)
+        : ''
+    const existingDeductions =
+      detail?.deductions != null && Number(detail.deductions) >= 0 ? String(detail.deductions) : '0'
+    setDepositInput(ledgerVal)
+    setDeductionsInput(existingDeductions)
+    setNoDepositChecked(ledgerVal !== '' && Number(ledgerVal) === 0)
+    setVerifyRemarks(detail?.accounts_note || '')
     setVerifyError('')
     setVerifyModalOpen(true)
   }
 
-  const handleCalculateFinal = () => {
-    const dep = parseFloat(depositInput) || 0
-    const ded = parseFloat(deductionsInput) || 0
-    return Math.max(0, dep - ded).toFixed(2)
-  }
-
   const handleVerifyStep1Submit = (e) => {
     e.preventDefault()
-    const dep = parseFloat(depositInput)
-    const ded = parseFloat(deductionsInput)
+    setVerifyError('')
 
-    if (isNaN(dep) || dep < 0) {
-      setVerifyError('Please enter a valid deposit amount (greater than or equal to 0).')
+    const trimmedDep = depositInput.trim()
+    const trimmedDed = deductionsInput.trim()
+
+    if (!trimmedDep) {
+      setVerifyError('Security deposit paid by student is required.')
       return
     }
+    if (!isValidDecimal(trimmedDep)) {
+      setVerifyError('Deposit amount must be a valid number with at most two decimal places.')
+      return
+    }
+    const dep = Number(trimmedDep)
+    if (isNaN(dep) || dep < 0 || dep > 99999999.99) {
+      setVerifyError('Deposit amount must be between 0 and 99,999,999.99.')
+      return
+    }
+
+    if (!trimmedDed) {
+      setVerifyError('Deductions amount is required (enter 0 if no deductions).')
+      return
+    }
+    if (!isValidDecimal(trimmedDed)) {
+      setVerifyError('Deductions must be a valid number with at most two decimal places.')
+      return
+    }
+    const ded = Number(trimmedDed)
     if (isNaN(ded) || ded < 0) {
       setVerifyError('Deductions cannot be negative.')
       return
     }
     if (ded > dep) {
-      setVerifyError('Deductions cannot exceed the total security deposit amount.')
+      setVerifyError(`Deductions cannot exceed the total security deposit amount (${formatInr(dep)}).`)
       return
     }
+
+    if (dep === 0 && !noDepositChecked) {
+      setVerifyError('Please confirm by ticking the checkbox that this student has no deposit to refund.')
+      return
+    }
+
     if (!verifyRemarks.trim()) {
       setVerifyError('Audit remarks are mandatory when verifying refund calculations.')
+      return
+    }
+    if (verifyRemarks.trim().length > 500) {
+      setVerifyError('Remarks cannot exceed 500 characters.')
       return
     }
 
@@ -288,8 +331,8 @@ export function RegistrarRequestDetailPage() {
 
   const handleConfirmVerifySubmit = () => {
     verifyMutation.mutate({
-      deposit_amount: depositInput,
-      deductions: deductionsInput,
+      deposit_amount: Number(depositInput.trim()),
+      deductions: Number(deductionsInput.trim()),
       remarks: verifyRemarks.trim(),
     })
   }
@@ -635,19 +678,27 @@ export function RegistrarRequestDetailPage() {
             <div className="p-3.5 rounded-lg bg-zinc-50 border border-zinc-200">
               <span className="text-zinc-500 block text-[11px]">Security Deposit Amount</span>
               <span className="text-base font-bold font-mono text-zinc-950">
-                ₹{detail.deposit_amount || '0.00'}
+                {detail.refund_status === 'PENDING_VERIFICATION' || !isAccountsVerified
+                  ? detail.ledger_deposit_amount && Number(detail.ledger_deposit_amount) > 0
+                    ? `${formatInr(detail.ledger_deposit_amount)} (Ledger)`
+                    : '—'
+                  : formatInr(detail.deposit_amount || 0)}
               </span>
             </div>
             <div className="p-3.5 rounded-lg bg-zinc-50 border border-zinc-200">
               <span className="text-zinc-500 block text-[11px]">Assessed Deductions / Dues</span>
               <span className="text-base font-bold font-mono text-rose-600">
-                -₹{detail.deductions || '0.00'}
+                {detail.refund_status === 'PENDING_VERIFICATION' || !isAccountsVerified || detail.deductions == null
+                  ? '—'
+                  : `- ${formatInr(detail.deductions)}`}
               </span>
             </div>
             <div className="p-3.5 rounded-lg bg-emerald-50/70 border border-emerald-200">
               <span className="text-emerald-800 font-semibold block text-[11px]">Net Disbursable Refund</span>
               <span className="text-base font-bold font-mono text-emerald-700">
-                ₹{detail.final_amount || detail.deposit_amount || '0.00'}
+                {detail.refund_status === 'PENDING_VERIFICATION' || !isAccountsVerified || detail.final_amount == null
+                  ? '—'
+                  : formatInr(detail.final_amount)}
               </span>
             </div>
           </div>
@@ -1093,19 +1144,56 @@ export function RegistrarRequestDetailPage() {
             <div className="space-y-4 py-1 text-xs">
               <div className="space-y-1.5">
                 <Label htmlFor="depAmount" className="text-xs font-semibold text-zinc-800">
-                  Total Security Deposit Collected (₹) *
+                  Security deposit paid by the student (₹) *
                 </Label>
                 <Input
                   id="depAmount"
                   type="number"
                   step="0.01"
                   min="0"
+                  max="99999999.99"
                   value={depositInput}
-                  onChange={(e) => setDepositInput(e.target.value)}
+                  onChange={(e) => {
+                    setDepositInput(e.target.value)
+                    if (verifyError) setVerifyError('')
+                    if (e.target.value !== '' && Number(e.target.value) !== 0) {
+                      setNoDepositChecked(false)
+                    }
+                  }}
                   className="font-mono text-xs"
+                  placeholder="Enter amount from ledger/receipt"
                   required
                 />
+                {detail?.ledger_deposit_amount && Number(detail.ledger_deposit_amount) > 0 ? (
+                  <div className="flex items-center gap-1.5 p-2 rounded-md bg-blue-50/80 border border-blue-200 text-blue-900 text-[11px] font-medium">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-600 inline-block" />
+                    From the deposit ledger. Confirm or correct it.
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-zinc-500">
+                    Enter the amount from the university's deposit receipt or ledger. It is not stored anywhere else.
+                  </p>
+                )}
               </div>
+
+              {/* Checkbox if deposit is 0 */}
+              {depositInput.trim() !== '' && Number(depositInput) === 0 && (
+                <div className="flex items-center space-x-2 p-2.5 rounded-lg bg-zinc-50 border border-zinc-200">
+                  <input
+                    id="no-deposit-checkbox-detail"
+                    type="checkbox"
+                    checked={noDepositChecked}
+                    onChange={(e) => {
+                      setNoDepositChecked(e.target.checked)
+                      if (verifyError) setVerifyError('')
+                    }}
+                    className="h-4 w-4 rounded border-zinc-300 text-zinc-950 focus:ring-zinc-950 cursor-pointer"
+                  />
+                  <Label htmlFor="no-deposit-checkbox-detail" className="text-xs font-medium text-zinc-900 cursor-pointer">
+                    This student has no deposit to refund
+                  </Label>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <Label htmlFor="dedAmount" className="text-xs font-semibold text-zinc-800">
@@ -1116,22 +1204,65 @@ export function RegistrarRequestDetailPage() {
                   type="number"
                   step="0.01"
                   min="0"
+                  max={depositInput ? Math.max(0, Number(depositInput)) : 99999999.99}
                   value={deductionsInput}
-                  onChange={(e) => setDeductionsInput(e.target.value)}
+                  onChange={(e) => {
+                    setDeductionsInput(e.target.value)
+                    if (verifyError) setVerifyError('')
+                  }}
                   className="font-mono text-xs"
                   required
                 />
               </div>
 
-              {/* Live Preview of Final Amount */}
-              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-zinc-700">
-                  Live Net Payout Calculation:
-                </span>
-                <span className="font-mono font-bold text-sm text-emerald-700">
-                  ₹{handleCalculateFinal()}
-                </span>
-              </div>
+              {/* Live Preview Calculation Breakdown */}
+              {(() => {
+                const typedDep = depositInput.trim() !== '' && !isNaN(Number(depositInput)) ? Number(depositInput) : null
+                const typedDed = deductionsInput.trim() !== '' && !isNaN(Number(deductionsInput)) ? Number(deductionsInput) : 0
+                const netRefund = typedDep !== null ? Math.max(0, typedDep - typedDed) : 0
+                const isNetZero = typedDep !== null && netRefund === 0
+
+                return (
+                  <div className="space-y-3">
+                    <div className="p-3.5 rounded-lg bg-zinc-50 border border-zinc-200 space-y-1.5 text-xs">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 block">
+                        Live Calculation Breakdown
+                      </span>
+                      <div className="flex justify-between text-zinc-600">
+                        <span>Original Security Deposit:</span>
+                        <span className="font-mono font-medium">
+                          {typedDep !== null ? formatInr(typedDep) : '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-rose-700">
+                        <span>Less Verified Deductions:</span>
+                        <span className="font-mono font-medium">
+                          - {formatInr(typedDed)}
+                        </span>
+                      </div>
+                      <div className="pt-2 border-t border-zinc-200 flex justify-between items-center text-sm font-bold text-zinc-950">
+                        <span className="text-xs">Net Refund Payable to Student:</span>
+                        <span className="font-mono text-emerald-800 text-base">
+                          {typedDep !== null ? formatInr(netRefund) : '—'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Clear warning when net refund is 0 */}
+                    {isNetZero && (
+                      <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div className="leading-snug">
+                          <strong className="font-semibold">Notice:</strong> Net refund payable to student is {formatInr(0)}.
+                          {typedDep === 0
+                            ? ' This student has zero security deposit recorded.'
+                            : ' Total assessed deductions match the full security deposit.'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               <div className="space-y-1.5">
                 <Label htmlFor="verifyRemarks" className="text-xs font-semibold text-zinc-800">
@@ -1162,6 +1293,12 @@ export function RegistrarRequestDetailPage() {
               <Button
                 type="submit"
                 size="sm"
+                disabled={
+                  verifyMutation.isPending ||
+                  depositInput.trim() === '' ||
+                  (depositInput.trim() !== '' && Number(depositInput) === 0 && !noDepositChecked) ||
+                  Number(deductionsInput) > Number(depositInput)
+                }
                 className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
               >
                 Proceed to Confirmation
@@ -1180,14 +1317,13 @@ export function RegistrarRequestDetailPage() {
             </AlertDialogTitle>
             <AlertDialogDescription className="text-xs text-zinc-600 space-y-2">
               <p>
-                Are you sure you want to verify refund of <strong>₹{handleCalculateFinal()}</strong> for{' '}
-                <strong>{detail.student_name}</strong> ({detail.registration_number})?
+                You are confirming: deposit <strong>{formatInr(depositInput || 0)}</strong>, deductions <strong>{formatInr(deductionsInput || 0)}</strong>, net refund <strong>{formatInr(Math.max(0, (Number(depositInput) || 0) - (Number(deductionsInput) || 0)))}</strong>. The student will see these amounts.
               </p>
               <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-mono space-y-1">
-                <div>Original Deposit: ₹{depositInput}</div>
-                <div>Deductions: -₹{deductionsInput}</div>
+                <div>Original Deposit: {formatInr(depositInput || 0)}</div>
+                <div>Deductions: -{formatInr(deductionsInput || 0)}</div>
                 <div className="font-bold text-emerald-700 pt-1 border-t border-zinc-200">
-                  Net Disbursable: ₹{handleCalculateFinal()}
+                  Net Disbursable: {formatInr(Math.max(0, (Number(depositInput) || 0) - (Number(deductionsInput) || 0)))}
                 </div>
               </div>
             </AlertDialogDescription>

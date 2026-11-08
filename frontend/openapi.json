@@ -965,6 +965,16 @@
               }
             }
           },
+          "409": {
+            "description": "Bank details cannot be modified after refund has been processed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -981,6 +991,104 @@
             "OAuth2PasswordBearer": []
           }
         ]
+      }
+    },
+    "/student/requests/{request_id}/refund/confirm": {
+      "post": {
+        "tags": [
+          "Student"
+        ],
+        "summary": "Confirm Refund Receipt or Report Issue",
+        "description": "Student confirms receipt of their refunded deposit once PROCESSED, or reports an issue/delay with a mandatory note when PROCESSED or PAYMENT_FAILED.",
+        "operationId": "confirm_refund_received",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StudentRefundConfirmRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Mandatory issue note missing or invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden: not your clearance request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Invalid refund status for this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/student/requests/{request_id}/certificate.pdf": {
@@ -3124,8 +3232,8 @@
         "tags": [
           "Registrar / Accounts"
         ],
-        "summary": "Get Cleared or Refund-Verified Requests for Refund",
-        "description": "Returns a paginated list of clearance requests in CLEARED or REFUND_VERIFIED status, allowing the university accounts branch to verify refunds and record disbursement payment references.",
+        "summary": "Get Clearance Requests for Refund Queue",
+        "description": "Returns a paginated list of clearance requests filtered by tab (TO_VERIFY, TO_PAY, PAID, FAILED, ALL), tab counts, and aggregate financial totals for accounts verification and disbursement.",
         "operationId": "get_registrar_queue",
         "security": [
           {
@@ -3134,16 +3242,40 @@
         ],
         "parameters": [
           {
+            "name": "tab",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Queue tab: TO_VERIFY, TO_PAY, PAID, FAILED, ALL",
+              "title": "Tab"
+            },
+            "description": "Queue tab: TO_VERIFY, TO_PAY, PAID, FAILED, ALL"
+          },
+          {
             "name": "status",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "description": "Filter by clearance status: CLEARED (default) or REFUND_VERIFIED",
-              "default": "CLEARED",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Legacy status filter: CLEARED or REFUND_VERIFIED",
               "title": "Status"
             },
-            "description": "Filter by clearance status: CLEARED (default) or REFUND_VERIFIED"
+            "description": "Legacy status filter: CLEARED or REFUND_VERIFIED"
           },
           {
             "name": "limit",
@@ -3185,7 +3317,7 @@
             }
           },
           "400": {
-            "description": "Invalid status parameter. Must be CLEARED or REFUND_VERIFIED.",
+            "description": "Invalid tab or status parameter",
             "content": {
               "application/json": {
                 "schema": {
@@ -3223,7 +3355,7 @@
           "Registrar / Accounts"
         ],
         "summary": "Verify Refund Deductions and Approve",
-        "description": "Applies any verified dues/deductions against the initial security deposit. Deductions must satisfy 0 <= deductions <= deposit. Moves the refund status to VERIFIED and request status to REFUND_VERIFIED. Executes atomically with row locking and logs an audit trail.",
+        "description": "Applies verified dues/deductions against the initial security deposit. Deductions must satisfy 0 <= deductions <= deposit. Moves refund status to VERIFIED and request status to REFUND_VERIFIED. Remarks become student-visible accounts_note (max 500 characters). Executes atomically with row locking.",
         "operationId": "verify_student_refund",
         "security": [
           {
@@ -3263,7 +3395,7 @@
             }
           },
           "400": {
-            "description": "Request not in CLEARED status or invalid deduction limits",
+            "description": "Invalid deduction limits or remarks",
             "content": {
               "application/json": {
                 "schema": {
@@ -3292,6 +3424,114 @@
               }
             }
           },
+          "409": {
+            "description": "Request not in CLEARED status or refund not in PENDING_VERIFICATION",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/reopen-verification": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Reopen Refund Verification to Correct Amounts",
+        "description": "Reopens a verified refund back to PENDING_VERIFICATION and transitions request status from REFUND_VERIFIED back to CLEARED, allowing accounts staff to correct deductions or amounts. Reason is mandatory.",
+        "operationId": "reopen_refund_verification",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReopenVerificationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyRefundResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or empty reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refund not in VERIFIED status or request not in REFUND_VERIFIED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -3311,7 +3551,7 @@
           "Registrar / Accounts"
         ],
         "summary": "Mark Refund Disbursed / Processed",
-        "description": "Records the bank payment reference (UTR/NEFT) once the refund amount is disbursed to the student's verified bank account. Requires the refund to have been VERIFIED previously.",
+        "description": "Records the bank payment reference (6 to 40 letters/digits/hyphens), disbursement date (paid_on), and payment mode once the refund is disbursed. Only allowed when refund is VERIFIED. Closes open student issue if any.",
         "operationId": "mark_refund_processed",
         "security": [
           {
@@ -3351,7 +3591,7 @@
             }
           },
           "400": {
-            "description": "Refund not in VERIFIED status yet",
+            "description": "Invalid disbursement date or payment reference",
             "content": {
               "application/json": {
                 "schema": {
@@ -3380,6 +3620,287 @@
               }
             }
           },
+          "409": {
+            "description": "Refund not in VERIFIED status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/mark-failed": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Mark Refund Payment as Failed",
+        "description": "Marks a verified or processed refund disbursement as failed (e.g. invalid bank account or RTGS bounce). Reason is mandatory. Retains previous payment reference in audit log. Closes open student issue if any.",
+        "operationId": "mark_refund_failed",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkRefundFailedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or empty failure reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refund not in VERIFIED or PROCESSED status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/retry-payment": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Retry Failed Refund Payment",
+        "description": "Transitions a refund in PAYMENT_FAILED status back to VERIFIED, enabling re-disbursement.",
+        "operationId": "retry_refund_payment",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Refund not in PAYMENT_FAILED status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/requests/{request_id}/resolve-issue": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Resolve Student Refund Issue",
+        "description": "Closes an open student issue on a refund by setting student_issue_resolved_at to current timestamp.",
+        "operationId": "resolve_student_refund_issue",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "request_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Request Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ResolveStudentIssueRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Clearance request or refund record not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No open student issue to resolve",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -3399,7 +3920,7 @@
           "Registrar / Accounts"
         ],
         "summary": "Get Clearance Request Details for Registrar",
-        "description": "Returns full request details including student provenance (who uploaded/added to roster), masked bank account details, and refund status.",
+        "description": "Returns full request details including student provenance (who uploaded/added to roster), masked bank account details, and full refund timeline.",
         "operationId": "get_registrar_request_detail",
         "security": [
           {
@@ -3440,6 +3961,76 @@
           },
           "404": {
             "description": "Clearance request not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/refunds/export.csv": {
+      "get": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Export Refunds to CSV",
+        "description": "Exports a CSV table of refunds filtered by queue tab (TO_VERIFY, TO_PAY, PAID, FAILED, ALL). Strictly includes only masked bank account numbers (e.g. '********1234') and never plain accounts. Logs an audit entry and requires registrar_accounts role.",
+        "operationId": "export_refunds_csv",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "tab",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Filter tab: TO_VERIFY, TO_PAY, PAID, FAILED, ALL",
+              "default": "ALL",
+              "title": "Tab"
+            },
+            "description": "Filter tab: TO_VERIFY, TO_PAY, PAID, FAILED, ALL"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV export file",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/csv": {}
+            }
+          },
+          "400": {
+            "description": "Invalid tab filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
             "content": {
               "application/json": {
                 "schema": {
@@ -3528,6 +4119,221 @@
           },
           "429": {
             "description": "Rate limit exceeded (10 calls/min)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/deposit-ledger/template.csv": {
+      "get": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Download Deposit Ledger CSV Template",
+        "description": "Downloads a CSV template formatted for security deposit ledger upload with sample data.",
+        "operationId": "get_deposit_ledger_template",
+        "responses": {
+          "200": {
+            "description": "Deposit ledger CSV template",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/csv": {}
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/registrar/deposit-ledger/upload": {
+      "post": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Bulk Upload Security Deposit Ledger from CSV",
+        "description": "Uploads a CSV to set or update student_roster.security_deposit_amount (the ledger value) for students whose refund has not yet been verified or processed. Supports dry-run simulation.",
+        "operationId": "upload_deposit_ledger_csv",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Simulate upload without persisting changes",
+              "default": false,
+              "title": "Dry Run"
+            },
+            "description": "Simulate upload without persisting changes"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_deposit_ledger_csv"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositLedgerUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CSV file or format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/registrar/roster/{id}/deposit": {
+      "patch": {
+        "tags": [
+          "Registrar / Accounts"
+        ],
+        "summary": "Update Single Student Security Deposit Ledger Amount",
+        "description": "Updates the security deposit ledger amount for a student in the roster whose refund is not yet verified or processed.",
+        "operationId": "update_roster_student_deposit",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRosterDepositRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateRosterDepositResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid deposit amount",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-registrar roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Student roster entry not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Student refund is already verified or processed",
             "content": {
               "application/json": {
                 "schema": {
@@ -7899,6 +8705,21 @@
         ],
         "title": "Body_upload_department_roster_csv"
       },
+      "Body_upload_deposit_ledger_csv": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "CSV file with registration_number and deposit_amount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_deposit_ledger_csv"
+      },
       "Body_upload_roster_csv": {
         "properties": {
           "file": {
@@ -8163,6 +8984,21 @@
               "4750.00"
             ]
           },
+          "accounts_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accounts Note",
+            "description": "Remarks from accounts branch explaining verification or deductions",
+            "examples": [
+              "Hostel clearance complete"
+            ]
+          },
           "payment_reference": {
             "anyOf": [
               {
@@ -8177,6 +9013,90 @@
             "examples": [
               "NEFT_SVSU_20261030_0099"
             ]
+          },
+          "paid_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid On",
+            "description": "Date payment was disbursed to bank",
+            "examples": [
+              "2026-11-08"
+            ]
+          },
+          "payment_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Mode",
+            "description": "Disbursement payment mode: NEFT, IMPS, UPI, CHEQUE, OTHER",
+            "examples": [
+              "NEFT"
+            ]
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason",
+            "description": "Reason why bank transaction failed (when PAYMENT_FAILED)",
+            "examples": [
+              "Bank account inactive"
+            ]
+          },
+          "student_confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Confirmed At",
+            "description": "Timestamp when student confirmed receipt of funds"
+          },
+          "student_issue_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Issue Note",
+            "description": "Note provided by student reporting a refund issue"
+          },
+          "student_issue_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Issue At",
+            "description": "Timestamp when student reported issue"
           }
         },
         "type": "object",
@@ -9042,6 +9962,150 @@
         "title": "DepartmentRosterPatch",
         "description": "Payload to update an existing student in the academic department's roster."
       },
+      "DepositLedgerRowReport": {
+        "properties": {
+          "row_number": {
+            "type": "integer",
+            "title": "Row Number",
+            "description": "Row number in uploaded CSV (1-indexed, excluding header)",
+            "examples": [
+              1
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "2026SVSU0001"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Processing status: updated, unchanged, or rejected",
+            "examples": [
+              "updated"
+            ]
+          },
+          "old_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Amount",
+            "description": "Previous ledger deposit amount",
+            "examples": [
+              "0.00"
+            ]
+          },
+          "new_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Amount",
+            "description": "New ledger deposit amount if accepted",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason",
+            "description": "Rejection reason if status is rejected",
+            "examples": [
+              "Student registration number not found in roster"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "row_number",
+          "registration_number",
+          "status"
+        ],
+        "title": "DepositLedgerRowReport",
+        "description": "Row processing result for deposit ledger CSV upload."
+      },
+      "DepositLedgerUploadResponse": {
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "description": "Whether this was a dry-run preview execution",
+            "examples": [
+              false
+            ]
+          },
+          "total_rows": {
+            "type": "integer",
+            "title": "Total Rows",
+            "description": "Total rows parsed in CSV",
+            "examples": [
+              10
+            ]
+          },
+          "updated_count": {
+            "type": "integer",
+            "title": "Updated Count",
+            "description": "Count of successfully updated/created ledger entries",
+            "examples": [
+              8
+            ]
+          },
+          "unchanged_count": {
+            "type": "integer",
+            "title": "Unchanged Count",
+            "description": "Count of unchanged rows where deposit matches existing ledger",
+            "default": 0,
+            "examples": [
+              0
+            ]
+          },
+          "rejected_count": {
+            "type": "integer",
+            "title": "Rejected Count",
+            "description": "Count of rejected rows",
+            "examples": [
+              2
+            ]
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/DepositLedgerRowReport"
+            },
+            "type": "array",
+            "title": "Rows",
+            "description": "Row-by-row upload results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dry_run",
+          "total_rows",
+          "updated_count",
+          "rejected_count",
+          "rows"
+        ],
+        "title": "DepositLedgerUploadResponse",
+        "description": "Overall summary and row-by-row report for deposit ledger CSV upload."
+      },
       "ErrorResponse": {
         "properties": {
           "detail": {
@@ -9885,16 +10949,60 @@
         ],
         "title": "LiveHealthResponse"
       },
+      "MarkRefundFailedRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "description": "Reason why bank transaction failed",
+            "examples": [
+              "Beneficiary bank account inactive or closed"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "MarkRefundFailedRequest",
+        "description": "Payload to mark a verified or processed refund as failed."
+      },
       "MarkRefundProcessedRequest": {
         "properties": {
           "payment_reference": {
             "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
+            "maxLength": 40,
+            "minLength": 6,
+            "pattern": "^[a-zA-Z0-9\\-_]{6,40}$",
             "title": "Payment Reference",
-            "description": "Official bank payment / UTR / NEFT reference number",
+            "description": "Official bank payment reference (6 to 40 letters, digits, hyphens, and underscores)",
             "examples": [
-              "UTR20261026009847"
+              "NEFT-SVSU-20261108-001"
+            ]
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date",
+            "title": "Paid On",
+            "description": "Date payment was disbursed to bank",
+            "examples": [
+              "2026-11-08"
+            ]
+          },
+          "payment_mode": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PaymentMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Disbursement payment mode: NEFT, IMPS, UPI, CHEQUE, OTHER",
+            "examples": [
+              "NEFT"
             ]
           }
         },
@@ -9920,7 +11028,7 @@
             "title": "Payment Reference",
             "description": "Recorded payment reference",
             "examples": [
-              "UTR20261026009847"
+              "NEFT-SVSU-20261108-001"
             ]
           },
           "refund_status": {
@@ -9930,6 +11038,31 @@
             "examples": [
               "PROCESSED"
             ]
+          },
+          "paid_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid On",
+            "description": "Disbursement date"
+          },
+          "payment_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Mode",
+            "description": "Payment mode"
           },
           "updated_at": {
             "type": "string",
@@ -9947,6 +11080,24 @@
         ],
         "title": "MarkRefundProcessedResponse",
         "description": "Response after marking refund as processed."
+      },
+      "MessageResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "Status or acknowledgment message",
+            "examples": [
+              "Action completed successfully"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "MessageResponse",
+        "description": "Generic informational response payload."
       },
       "OfficePendingCount": {
         "properties": {
@@ -9983,6 +11134,17 @@
         ],
         "title": "OfficePendingCount",
         "description": "Pending count for a single office belonging to an officer."
+      },
+      "PaymentMode": {
+        "type": "string",
+        "enum": [
+          "NEFT",
+          "IMPS",
+          "UPI",
+          "CHEQUE",
+          "OTHER"
+        ],
+        "title": "PaymentMode"
       },
       "ProgrammeCreate": {
         "properties": {
@@ -10209,9 +11371,47 @@
         "enum": [
           "PENDING_VERIFICATION",
           "VERIFIED",
-          "PROCESSED"
+          "PROCESSED",
+          "PAYMENT_FAILED"
         ],
         "title": "RefundStatus"
+      },
+      "RegistrarQueueCounts": {
+        "properties": {
+          "TO_VERIFY": {
+            "type": "integer",
+            "title": "To Verify",
+            "description": "Count of requests waiting for verification",
+            "default": 0
+          },
+          "TO_PAY": {
+            "type": "integer",
+            "title": "To Pay",
+            "description": "Count of verified refunds ready for payment",
+            "default": 0
+          },
+          "PAID": {
+            "type": "integer",
+            "title": "Paid",
+            "description": "Count of disbursed refunds",
+            "default": 0
+          },
+          "FAILED": {
+            "type": "integer",
+            "title": "Failed",
+            "description": "Count of failed refund disbursements",
+            "default": 0
+          },
+          "ALL": {
+            "type": "integer",
+            "title": "All",
+            "description": "Total count across all refund states",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "RegistrarQueueCounts",
+        "description": "Counts per queue tab."
       },
       "RegistrarQueueItem": {
         "properties": {
@@ -10219,6 +11419,21 @@
             "type": "integer",
             "title": "Request Id",
             "description": "Unique clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "roster_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roster Id",
+            "description": "Student roster entry ID",
             "examples": [
               1
             ]
@@ -10313,6 +11528,27 @@
             "examples": [
               "PENDING_VERIFICATION"
             ]
+          },
+          "student_issue_open": {
+            "type": "boolean",
+            "title": "Student Issue Open",
+            "description": "True if student has an open unresolved refund issue",
+            "default": false
+          },
+          "ledger_deposit_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger Deposit Amount",
+            "description": "Official security deposit amount in deposit ledger (null if 0 or unset)",
+            "examples": [
+              "5000.00"
+            ]
           }
         },
         "type": "object",
@@ -10333,7 +11569,7 @@
           "total": {
             "type": "integer",
             "title": "Total",
-            "description": "Total count of eligible requests",
+            "description": "Total count of eligible requests in this tab",
             "examples": [
               1
             ]
@@ -10345,6 +11581,22 @@
             "type": "array",
             "title": "Items",
             "description": "Batch of items"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/RegistrarQueueCounts",
+            "description": "Counts per queue tab"
+          },
+          "total_to_pay_amount": {
+            "type": "string",
+            "title": "Total To Pay Amount",
+            "description": "Sum of final refund amounts for TO_PAY tab",
+            "default": "0.00"
+          },
+          "total_paid_amount": {
+            "type": "string",
+            "title": "Total Paid Amount",
+            "description": "Sum of final refund amounts for PAID tab",
+            "default": "0.00"
           }
         },
         "type": "object",
@@ -10361,6 +11613,21 @@
             "type": "integer",
             "title": "Request Id",
             "description": "Clearance request ID",
+            "examples": [
+              1
+            ]
+          },
+          "roster_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roster Id",
+            "description": "Student roster entry ID",
             "examples": [
               1
             ]
@@ -10482,6 +11749,21 @@
               "5000.00"
             ]
           },
+          "ledger_deposit_amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ledger Deposit Amount",
+            "description": "Official security deposit amount in deposit ledger (null if 0 or unset)",
+            "examples": [
+              "5000.00"
+            ]
+          },
           "deductions": {
             "anyOf": [
               {
@@ -10527,6 +11809,181 @@
             "type": "array",
             "title": "Approvals",
             "description": "List of departmental clearance decisions"
+          },
+          "verified_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified At",
+            "description": "Timestamp of refund verification"
+          },
+          "verified_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified By Name",
+            "description": "Name of staff who verified refund"
+          },
+          "accounts_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accounts Note",
+            "description": "Student-visible accounts remarks"
+          },
+          "paid_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid At",
+            "description": "Timestamp when refund was marked as processed"
+          },
+          "paid_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid By Name",
+            "description": "Name of staff who recorded payment"
+          },
+          "paid_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid On",
+            "description": "Date payment was disbursed to bank"
+          },
+          "payment_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Mode",
+            "description": "Payment mode used (NEFT, IMPS, UPI, CHEQUE, OTHER)"
+          },
+          "payment_reference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Reference",
+            "description": "Recorded bank transaction reference"
+          },
+          "failure_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Reason",
+            "description": "Reason if payment disbursement failed"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At",
+            "description": "Timestamp of payment failure"
+          },
+          "student_confirmed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Confirmed At",
+            "description": "Timestamp when student confirmed receipt"
+          },
+          "student_issue_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Issue Note",
+            "description": "Note from student reporting refund issue"
+          },
+          "student_issue_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Issue At",
+            "description": "Timestamp when student reported issue"
+          },
+          "student_issue_resolved_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Student Issue Resolved At",
+            "description": "Timestamp when student issue was resolved"
           }
         },
         "type": "object",
@@ -10545,7 +12002,50 @@
           "approvals"
         ],
         "title": "RegistrarRequestDetailResponse",
-        "description": "Full request details for registrar review with roster provenance."
+        "description": "Full request details for registrar review with roster provenance and complete refund timeline."
+      },
+      "ReopenVerificationRequest": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "description": "Mandatory justification for reopening verification to correct amounts",
+            "examples": [
+              "Need to correct hostel damage deduction"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "ReopenVerificationRequest",
+        "description": "Payload to reopen a verified refund back to pending verification."
+      },
+      "ResolveStudentIssueRequest": {
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "Resolution note by registrar",
+            "examples": [
+              "Contacted student bank branch, reference verified"
+            ]
+          }
+        },
+        "type": "object",
+        "title": "ResolveStudentIssueRequest",
+        "description": "Payload to close an open student issue."
       },
       "RevealBankDetailsResponse": {
         "properties": {
@@ -11245,6 +12745,34 @@
         "title": "StudentLabCatalogResponse",
         "description": "Lab catalog and fallback service offices available for student declaration."
       },
+      "StudentRefundConfirmRequest": {
+        "properties": {
+          "received": {
+            "type": "boolean",
+            "title": "Received",
+            "description": "True if student confirmed funds received, False if reporting issue"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note",
+            "description": "Mandatory issue description if received is False"
+          }
+        },
+        "type": "object",
+        "required": [
+          "received"
+        ],
+        "title": "StudentRefundConfirmRequest",
+        "description": "Payload for student to confirm refund receipt or report an issue."
+      },
       "TokenResponse": {
         "properties": {
           "access_token": {
@@ -11320,6 +12848,83 @@
         "type": "object",
         "title": "UpdateLabWorkshopRequest",
         "description": "Payload for an academic officer to update their Lab / Workshop office."
+      },
+      "UpdateRosterDepositRequest": {
+        "properties": {
+          "deposit_amount": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 99999999.99,
+                "minimum": 0.0
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Deposit Amount",
+            "description": "Security deposit amount in INR (0 to 99999999.99, max 2 decimals)",
+            "examples": [
+              "5000.00"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "deposit_amount"
+        ],
+        "title": "UpdateRosterDepositRequest",
+        "description": "Payload to update single student's security deposit ledger amount."
+      },
+      "UpdateRosterDepositResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id",
+            "description": "Roster ID",
+            "examples": [
+              1
+            ]
+          },
+          "registration_number": {
+            "type": "string",
+            "title": "Registration Number",
+            "description": "Student registration number",
+            "examples": [
+              "2026SVSU0001"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "Student full name",
+            "examples": [
+              "Arjun Mehta"
+            ]
+          },
+          "security_deposit_amount": {
+            "type": "string",
+            "title": "Security Deposit Amount",
+            "description": "Updated security deposit amount in ledger",
+            "examples": [
+              "5000.00"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": "Deposit ledger amount updated successfully."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "registration_number",
+          "name",
+          "security_deposit_amount"
+        ],
+        "title": "UpdateRosterDepositResponse",
+        "description": "Result of updating single student's security deposit ledger amount."
       },
       "UserMeResponse": {
         "properties": {
