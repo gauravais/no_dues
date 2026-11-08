@@ -313,16 +313,18 @@ def create_request(
     if not roster.bank_detail:
         raise WorkflowBadRequestError("Bank details must be provided before applying for clearance.")
 
-    # Check existing active requests
-    existing_active = session.execute(
+    # Check existing non-cancelled requests (only one non-cancelled request allowed per student)
+    existing_request = session.execute(
         select(ClearanceRequest).where(
             ClearanceRequest.roster_id == roster.id,
-            ClearanceRequest.status.not_in([ClearanceStatus.REFUND_VERIFIED, ClearanceStatus.CANCELLED]),
+            ClearanceRequest.status != ClearanceStatus.CANCELLED,
         )
     ).scalars().first()
 
-    if existing_active:
-        raise WorkflowConflictError("Student already has an active clearance request.")
+    if existing_request:
+        raise WorkflowConflictError(
+            "Student already has an existing clearance request. Only one non-cancelled clearance request is permitted per student."
+        )
 
     # Validate active HoD for academic department
     prog = roster.programme

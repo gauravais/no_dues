@@ -150,4 +150,20 @@ export const studentApi = {
     })
     return response.data
   },
+
+  /**
+   * Confirm refund receipt or report an issue
+   * @param {number} requestId
+   * @param {Object} data
+   * @param {boolean} data.received
+   * @param {string} [data.note]
+   */
+  async confirmRefund(requestId, { received, note }) {
+    const payload = { received }
+    if (note !== undefined && note !== null) {
+      payload.note = note.trim()
+    }
+    const response = await api.post(`/student/requests/${requestId}/refund/confirm`, payload)
+    return response.data
+  },
 }

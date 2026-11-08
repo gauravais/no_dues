@@ -1,9 +1,11 @@
 """Registrar & Accounts refund verification and processing routes."""
+import csv
+import io
 import time
 from datetime import datetime, timezone
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from sqlalchemy import select, func, and_, or_
 from sqlalchemy.orm import joinedload
 
 from backend.app.api.deps import SessionDep, require_roles
@@ -13,22 +15,37 @@ from backend.app.models.clearance import ClearanceRequest, ClearanceStatus, Depa
 from backend.app.models.refund import Refund, RefundStatus
 from backend.app.models.roster import StudentRoster
 from backend.app.models.audit import AuditLog
-from backend.app.schemas.common import ErrorResponse
+from backend.app.schemas.common import ErrorResponse, MessageResponse
 from backend.app.schemas.workflow import DepartmentApprovalItem
 from backend.app.schemas.registrar import (
+    PaymentMode,
     RegistrarQueueResponse,
     RegistrarQueueItem,
+    RegistrarQueueCounts,
     RegistrarRequestDetailResponse,
     RevealBankDetailsResponse,
     VerifyRefundRequest,
     VerifyRefundResponse,
+    ReopenVerificationRequest,
     MarkRefundProcessedRequest,
     MarkRefundProcessedResponse,
+    MarkRefundFailedRequest,
+    ResolveStudentIssueRequest,
 )
-from backend.app.services.email import notify_refund_verified, notify_refund_processed
+from backend.app.services.email import (
+    notify_refund_verified,
+    notify_refund_processed,
+    notify_refund_failed,
+)
 
 router = APIRouter(prefix="/registrar", tags=["Registrar / Accounts"])
 require_registrar = require_roles(UserRole.registrar_accounts)
+
+def _payment_mode_str(val) -> str | None:
+    if not val:
+        return None
+    return val.value if hasattr(val, "value") else str(val)
+
 
 # Sliding window rate limiter for bank detail reveal: user_id -> list of float timestamps
 _reveal_rate_limits: dict[int, list[float]] = {}
@@ -39,48 +56,166 @@ _reveal_rate_limits: dict[int, list[float]] = {}
     response_model=RegistrarQueueResponse,
     status_code=status.HTTP_200_OK,
     operation_id="get_registrar_queue",
-    summary="Get Cleared or Refund-Verified Requests for Refund",
+    summary="Get Clearance Requests for Refund Queue",
     description=(
-        "Returns a paginated list of clearance requests in CLEARED or REFUND_VERIFIED status, "
-        "allowing the university accounts branch to verify refunds and record disbursement payment references."
+        "Returns a paginated list of clearance requests filtered by tab (TO_VERIFY, TO_PAY, PAID, FAILED, ALL), "
+        "tab counts, and aggregate financial totals for accounts verification and disbursement."
     ),
     responses={
-        400: {"model": ErrorResponse, "description": "Invalid status parameter. Must be CLEARED or REFUND_VERIFIED."},
+        400: {"model": ErrorResponse, "description": "Invalid tab or status parameter"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
     },
 )
 def get_registrar_queue(
     db: SessionDep,
     current_user: User = Depends(require_registrar),
-    queue_status: str = Query("CLEARED", alias="status", description="Filter by clearance status: CLEARED (default) or REFUND_VERIFIED"),
+    tab: str | None = Query(None, description="Queue tab: TO_VERIFY, TO_PAY, PAID, FAILED, ALL"),
+    queue_status: str | None = Query(None, alias="status", description="Legacy status filter: CLEARED or REFUND_VERIFIED"),
     limit: int = Query(50, ge=1, le=100, description="Page limit"),
     offset: int = Query(0, ge=0, description="Page offset"),
 ) -> RegistrarQueueResponse:
-    clean_status = queue_status.strip().upper()
-    if clean_status not in ("CLEARED", "REFUND_VERIFIED"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid status '{queue_status}'. Allowed values are 'CLEARED' or 'REFUND_VERIFIED'.",
-        )
+    use_legacy_status = False
+    legacy_status_val = None
+    if tab is not None:
+        clean_tab = tab.strip().upper()
+        if clean_tab not in ("TO_VERIFY", "TO_PAY", "PAID", "FAILED", "ALL"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid tab '{tab}'. Allowed values are TO_VERIFY, TO_PAY, PAID, FAILED, ALL.",
+            )
+    elif queue_status is not None:
+        clean_s = queue_status.strip().upper()
+        if clean_s == "CLEARED":
+            use_legacy_status = True
+            legacy_status_val = ClearanceStatus.CLEARED
+            clean_tab = "TO_VERIFY"
+        elif clean_s == "REFUND_VERIFIED":
+            use_legacy_status = True
+            legacy_status_val = ClearanceStatus.REFUND_VERIFIED
+            clean_tab = "TO_PAY"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status '{queue_status}'. Allowed values are 'CLEARED' or 'REFUND_VERIFIED'.",
+            )
+    else:
+        clean_tab = "TO_VERIFY"
 
-    target_status = ClearanceStatus(clean_status)
-
-    # Count total requests matching status
-    total = db.scalar(
+    # 1. Tab Counts
+    count_to_verify = db.scalar(
         select(func.count(ClearanceRequest.id))
-        .where(ClearanceRequest.status == target_status)
+        .outerjoin(Refund, ClearanceRequest.id == Refund.request_id)
+        .where(
+            ClearanceRequest.status == ClearanceStatus.CLEARED,
+            or_(Refund.id == None, Refund.status == RefundStatus.PENDING_VERIFICATION),
+        )
     ) or 0
 
-    # Fetch batch
-    requests = db.execute(
+    count_to_pay = db.scalar(
+        select(func.count(ClearanceRequest.id))
+        .join(Refund, ClearanceRequest.id == Refund.request_id)
+        .where(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.VERIFIED,
+        )
+    ) or 0
+
+    count_paid = db.scalar(
+        select(func.count(ClearanceRequest.id))
+        .join(Refund, ClearanceRequest.id == Refund.request_id)
+        .where(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PROCESSED,
+        )
+    ) or 0
+
+    count_failed = db.scalar(
+        select(func.count(ClearanceRequest.id))
+        .join(Refund, ClearanceRequest.id == Refund.request_id)
+        .where(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PAYMENT_FAILED,
+        )
+    ) or 0
+
+    count_all = db.scalar(
+        select(func.count(ClearanceRequest.id))
+        .where(
+            ClearanceRequest.status.in_([ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED]),
+        )
+    ) or 0
+
+    counts = RegistrarQueueCounts(
+        TO_VERIFY=count_to_verify,
+        TO_PAY=count_to_pay,
+        PAID=count_paid,
+        FAILED=count_failed,
+        ALL=count_all,
+    )
+
+    # 2. Financial Totals
+    total_to_pay = db.scalar(
+        select(func.coalesce(func.sum(Refund.final_amount), Decimal("0.00")))
+        .join(ClearanceRequest, ClearanceRequest.id == Refund.request_id)
+        .where(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.VERIFIED,
+        )
+    ) or Decimal("0.00")
+
+    total_paid = db.scalar(
+        select(func.coalesce(func.sum(Refund.final_amount), Decimal("0.00")))
+        .join(ClearanceRequest, ClearanceRequest.id == Refund.request_id)
+        .where(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PROCESSED,
+        )
+    ) or Decimal("0.00")
+
+    # 3. Query items for selected tab
+    base_query = (
         select(ClearanceRequest)
-        .where(ClearanceRequest.status == target_status)
+        .outerjoin(Refund, ClearanceRequest.id == Refund.request_id)
         .options(
-            joinedload(ClearanceRequest.roster_entry)
-            .joinedload(StudentRoster.programme),
+            joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.programme),
             joinedload(ClearanceRequest.refund),
             joinedload(ClearanceRequest.certificate),
         )
+    )
+
+    if use_legacy_status:
+        tab_filter = (ClearanceRequest.status == legacy_status_val)
+        total = db.scalar(select(func.count(ClearanceRequest.id)).where(tab_filter)) or 0
+    elif clean_tab == "TO_VERIFY":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.CLEARED,
+            or_(Refund.id == None, Refund.status == RefundStatus.PENDING_VERIFICATION),
+        )
+        total = count_to_verify
+    elif clean_tab == "TO_PAY":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.VERIFIED,
+        )
+        total = count_to_pay
+    elif clean_tab == "PAID":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PROCESSED,
+        )
+        total = count_paid
+    elif clean_tab == "FAILED":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PAYMENT_FAILED,
+        )
+        total = count_failed
+    else:  # ALL
+        tab_filter = ClearanceRequest.status.in_([ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED])
+        total = count_all
+
+    requests = db.execute(
+        base_query.where(tab_filter)
         .order_by(ClearanceRequest.updated_at.asc())
         .limit(limit)
         .offset(offset)
@@ -90,11 +225,12 @@ def get_registrar_queue(
     for req in requests:
         r = req.roster_entry
         prog_name = r.programme.name if (r and r.programme) else "N/A"
-        dep_amt = req.refund.deposit_amount if req.refund else (r.security_deposit_amount if r else 0)
+        dep_amt = req.refund.deposit_amount if req.refund else (r.security_deposit_amount if r else Decimal("0.00"))
         cleared_date = req.certificate.issued_at if req.certificate else req.updated_at
         refund_st = req.refund.status.value if req.refund else "N/A"
         deductions = req.refund.deductions if req.refund else None
         final_amt = req.refund.final_amount if req.refund else None
+        issue_open = bool(req.refund and req.refund.student_issue_at and not req.refund.student_issue_resolved_at)
 
         items.append(
             RegistrarQueueItem(
@@ -105,13 +241,20 @@ def get_registrar_queue(
                 deposit_amount=dep_amt,
                 deductions=deductions,
                 final_amount=final_amt,
-                cleared_at=cleared_date,
+                cleared_date=cleared_date,
                 status=req.status.value,
                 refund_status=refund_st,
+                student_issue_open=issue_open,
             )
         )
 
-    return RegistrarQueueResponse(total=total, items=items)
+    return RegistrarQueueResponse(
+        total=total,
+        items=items,
+        counts=counts,
+        total_to_pay_amount=total_to_pay,
+        total_paid_amount=total_paid,
+    )
 
 
 @router.post(
@@ -121,14 +264,15 @@ def get_registrar_queue(
     operation_id="verify_student_refund",
     summary="Verify Refund Deductions and Approve",
     description=(
-        "Applies any verified dues/deductions against the initial security deposit. Deductions must satisfy "
-        "0 <= deductions <= deposit. Moves the refund status to VERIFIED and request status to REFUND_VERIFIED. "
-        "Executes atomically with row locking and logs an audit trail."
+        "Applies verified dues/deductions against the initial security deposit. Deductions must satisfy "
+        "0 <= deductions <= deposit. Moves refund status to VERIFIED and request status to REFUND_VERIFIED. "
+        "Remarks become student-visible accounts_note (max 500 characters). Executes atomically with row locking."
     ),
     responses={
-        400: {"model": ErrorResponse, "description": "Request not in CLEARED status or invalid deduction limits"},
+        400: {"model": ErrorResponse, "description": "Invalid deduction limits or remarks"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
         404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "Request not in CLEARED status or refund not in PENDING_VERIFICATION"},
     },
 )
 def verify_refund(
@@ -149,7 +293,7 @@ def verify_refund(
 
     if req.status != ClearanceStatus.CLEARED:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail=f"Refund verification allowed only for requests in CLEARED status. Current: {req.status.value}",
         )
 
@@ -162,6 +306,12 @@ def verify_refund(
 
     if not refund:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refund record not found for this request")
+
+    if refund.status != RefundStatus.PENDING_VERIFICATION:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Refund verification allowed only when refund status is PENDING_VERIFICATION. Current: {refund.status.value}",
+        )
 
     target_deposit = body.deposit_amount if body.deposit_amount is not None else refund.deposit_amount
     if target_deposit < 0:
@@ -182,6 +332,11 @@ def verify_refund(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Remarks are mandatory when verifying refund.",
         )
+    if len(clean_remarks) > 500:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Remarks cannot exceed 500 characters.",
+        )
 
     now = datetime.now(timezone.utc)
     final_amt = target_deposit - body.deductions
@@ -191,6 +346,9 @@ def verify_refund(
     refund.deductions = body.deductions
     refund.final_amount = final_amt
     refund.remarks = clean_remarks
+    refund.accounts_note = clean_remarks
+    refund.verified_at = now
+    refund.verified_by_user_id = current_user.id
     refund.status = RefundStatus.VERIFIED
     refund.updated_at = now
 
@@ -212,7 +370,7 @@ def verify_refund(
         created_at=now,
     )
     db.add(audit)
-    notify_refund_verified(db, req, refund.final_amount or refund.deposit_amount)
+    notify_refund_verified(db, req, final_amt, clean_remarks)
     db.commit()
 
     return VerifyRefundResponse(
@@ -227,19 +385,101 @@ def verify_refund(
 
 
 @router.post(
+    "/requests/{request_id}/reopen-verification",
+    response_model=VerifyRefundResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="reopen_refund_verification",
+    summary="Reopen Refund Verification to Correct Amounts",
+    description=(
+        "Reopens a verified refund back to PENDING_VERIFICATION and transitions request status from REFUND_VERIFIED "
+        "back to CLEARED, allowing accounts staff to correct deductions or amounts. Reason is mandatory."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Missing or empty reason"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+        404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "Refund not in VERIFIED status or request not in REFUND_VERIFIED"},
+    },
+)
+def reopen_refund_verification(
+    request_id: int,
+    body: ReopenVerificationRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_registrar),
+) -> VerifyRefundResponse:
+    clean_reason = body.reason.strip() if body.reason else ""
+    if not clean_reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reason is mandatory to reopen verification.",
+        )
+    if len(clean_reason) > 500:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reason cannot exceed 500 characters.",
+        )
+
+    req = db.execute(
+        select(ClearanceRequest).where(ClearanceRequest.id == request_id).with_for_update()
+    ).scalars().first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clearance request not found")
+
+    refund = db.execute(
+        select(Refund).where(Refund.request_id == req.id).with_for_update()
+    ).scalars().first()
+    if not refund:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refund record not found")
+
+    if refund.status != RefundStatus.VERIFIED or req.status != ClearanceStatus.REFUND_VERIFIED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Reopen verification allowed only when refund is VERIFIED and request is REFUND_VERIFIED (current refund: {refund.status.value}, request: {req.status.value}).",
+        )
+
+    now = datetime.now(timezone.utc)
+    refund.status = RefundStatus.PENDING_VERIFICATION
+    refund.updated_at = now
+    req.status = ClearanceStatus.CLEARED
+    req.updated_at = now
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="REOPEN_REFUND_VERIFICATION",
+        entity_type="clearance_requests",
+        entity_id=req.id,
+        details={"reason": clean_reason},
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return VerifyRefundResponse(
+        request_id=req.id,
+        deposit_amount=refund.deposit_amount,
+        deductions=refund.deductions or Decimal("0.00"),
+        final_amount=refund.final_amount or refund.deposit_amount,
+        refund_status=refund.status.value,
+        request_status=req.status.value,
+        updated_at=refund.updated_at,
+    )
+
+
+@router.post(
     "/requests/{request_id}/mark-processed",
     response_model=MarkRefundProcessedResponse,
     status_code=status.HTTP_200_OK,
     operation_id="mark_refund_processed",
     summary="Mark Refund Disbursed / Processed",
     description=(
-        "Records the bank payment reference (UTR/NEFT) once the refund amount is disbursed to the student's "
-        "verified bank account. Requires the refund to have been VERIFIED previously."
+        "Records the bank payment reference (6 to 40 letters/digits/hyphens), disbursement date (paid_on), "
+        "and payment mode once the refund is disbursed. Only allowed when refund is VERIFIED. Closes open student issue if any."
     ),
     responses={
-        400: {"model": ErrorResponse, "description": "Refund not in VERIFIED status yet"},
+        400: {"model": ErrorResponse, "description": "Invalid disbursement date or payment reference"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
         404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "Refund not in VERIFIED status"},
     },
 )
 def mark_refund_processed(
@@ -248,6 +488,12 @@ def mark_refund_processed(
     db: SessionDep,
     current_user: User = Depends(require_registrar),
 ) -> MarkRefundProcessedResponse:
+    req = db.execute(
+        select(ClearanceRequest).where(ClearanceRequest.id == request_id).with_for_update()
+    ).scalars().first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clearance request not found")
+
     refund = db.execute(
         select(Refund)
         .where(Refund.request_id == request_id)
@@ -259,33 +505,256 @@ def mark_refund_processed(
 
     if refund.status != RefundStatus.VERIFIED:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_409_CONFLICT,
             detail=f"Refund must be in VERIFIED status before being marked as processed. Current status: {refund.status.value}",
         )
 
     now = datetime.now(timezone.utc)
+    today = now.date()
+
+    if body.paid_on > today:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Disbursement date cannot be in the future.",
+        )
+
+    if refund.verified_at and body.paid_on < refund.verified_at.date():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Disbursement date cannot be before the refund verification date.",
+        )
+
+    clean_ref = body.payment_reference.strip()
     refund.status = RefundStatus.PROCESSED
-    refund.payment_reference = body.payment_reference.strip()
+    refund.payment_reference = clean_ref
+    refund.paid_on = body.paid_on
+    refund.payment_mode = body.payment_mode.value if body.payment_mode else None
+    refund.paid_at = now
+    refund.paid_by_user_id = current_user.id
     refund.updated_at = now
+
+    if refund.student_issue_at and not refund.student_issue_resolved_at:
+        refund.student_issue_resolved_at = now
 
     audit = AuditLog(
         user_id=current_user.id,
         action="MARK_REFUND_PROCESSED",
         entity_type="clearance_requests",
         entity_id=request_id,
-        details={"payment_reference": body.payment_reference.strip()},
+        details={
+            "payment_reference": clean_ref,
+            "paid_on": str(body.paid_on),
+            "payment_mode": body.payment_mode.value if body.payment_mode else None,
+        },
         created_at=now,
     )
     db.add(audit)
-    notify_refund_processed(db, refund.request, refund.payment_reference)
+    notify_refund_processed(db, req, clean_ref, str(body.paid_on))
     db.commit()
 
     return MarkRefundProcessedResponse(
         request_id=request_id,
-        payment_reference=body.payment_reference.strip(),
+        payment_reference=clean_ref,
         refund_status=refund.status.value,
+        paid_on=refund.paid_on,
+        payment_mode=_payment_mode_str(refund.payment_mode),
         updated_at=refund.updated_at,
     )
+
+
+@router.post(
+    "/requests/{request_id}/mark-failed",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="mark_refund_failed",
+    summary="Mark Refund Payment as Failed",
+    description=(
+        "Marks a verified or processed refund disbursement as failed (e.g. invalid bank account or RTGS bounce). "
+        "Reason is mandatory. Retains previous payment reference in audit log. Closes open student issue if any."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Missing or empty failure reason"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+        404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "Refund not in VERIFIED or PROCESSED status"},
+    },
+)
+def mark_refund_failed(
+    request_id: int,
+    body: MarkRefundFailedRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_registrar),
+) -> MessageResponse:
+    clean_reason = body.reason.strip() if body.reason else ""
+    if not clean_reason:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failure reason is mandatory.",
+        )
+    if len(clean_reason) > 500:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failure reason cannot exceed 500 characters.",
+        )
+
+    req = db.execute(
+        select(ClearanceRequest).where(ClearanceRequest.id == request_id).with_for_update()
+    ).scalars().first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clearance request not found")
+
+    refund = db.execute(
+        select(Refund).where(Refund.request_id == req.id).with_for_update()
+    ).scalars().first()
+    if not refund:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refund record not found")
+
+    if refund.status not in (RefundStatus.VERIFIED, RefundStatus.PROCESSED):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Refund payment can only be marked failed from VERIFIED or PROCESSED status. Current status: {refund.status.value}",
+        )
+
+    now = datetime.now(timezone.utc)
+    previous_ref = refund.payment_reference
+    refund.status = RefundStatus.PAYMENT_FAILED
+    refund.failure_reason = clean_reason
+    refund.failed_at = now
+    refund.updated_at = now
+    if refund.student_issue_at and not refund.student_issue_resolved_at:
+        refund.student_issue_resolved_at = now
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="MARK_REFUND_FAILED",
+        entity_type="clearance_requests",
+        entity_id=req.id,
+        details={
+            "failure_reason": clean_reason,
+            "previous_payment_reference": previous_ref,
+        },
+        created_at=now,
+    )
+    db.add(audit)
+    notify_refund_failed(db, req, clean_reason)
+    db.commit()
+
+    return MessageResponse(detail=f"Refund payment marked as failed: {clean_reason}")
+
+
+@router.post(
+    "/requests/{request_id}/retry-payment",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="retry_refund_payment",
+    summary="Retry Failed Refund Payment",
+    description="Transitions a refund in PAYMENT_FAILED status back to VERIFIED, enabling re-disbursement.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+        404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "Refund not in PAYMENT_FAILED status"},
+    },
+)
+def retry_refund_payment(
+    request_id: int,
+    db: SessionDep,
+    current_user: User = Depends(require_registrar),
+) -> MessageResponse:
+    req = db.execute(
+        select(ClearanceRequest).where(ClearanceRequest.id == request_id).with_for_update()
+    ).scalars().first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clearance request not found")
+
+    refund = db.execute(
+        select(Refund).where(Refund.request_id == req.id).with_for_update()
+    ).scalars().first()
+    if not refund:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refund record not found")
+
+    if refund.status != RefundStatus.PAYMENT_FAILED:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Payment retry is only allowed when refund is PAYMENT_FAILED. Current status: {refund.status.value}",
+        )
+
+    now = datetime.now(timezone.utc)
+    refund.status = RefundStatus.VERIFIED
+    refund.failure_reason = None
+    refund.failed_at = None
+    refund.updated_at = now
+    if refund.student_issue_at and not refund.student_issue_resolved_at:
+        refund.student_issue_resolved_at = now
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="RETRY_REFUND_PAYMENT",
+        entity_type="clearance_requests",
+        entity_id=req.id,
+        details={"refund_id": refund.id},
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return MessageResponse(detail="Refund status reset to VERIFIED for re-disbursement.")
+
+
+@router.post(
+    "/requests/{request_id}/resolve-issue",
+    response_model=MessageResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="resolve_student_refund_issue",
+    summary="Resolve Student Refund Issue",
+    description="Closes an open student issue on a refund by setting student_issue_resolved_at to current timestamp.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+        404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "No open student issue to resolve"},
+    },
+)
+def resolve_student_issue(
+    request_id: int,
+    db: SessionDep,
+    body: ResolveStudentIssueRequest | None = None,
+    current_user: User = Depends(require_registrar),
+) -> MessageResponse:
+    req = db.execute(
+        select(ClearanceRequest).where(ClearanceRequest.id == request_id).with_for_update()
+    ).scalars().first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clearance request not found")
+
+    refund = db.execute(
+        select(Refund).where(Refund.request_id == req.id).with_for_update()
+    ).scalars().first()
+    if not refund:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refund record not found")
+
+    if not refund.student_issue_at or refund.student_issue_resolved_at:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No open student issue found on this refund record.",
+        )
+
+    now = datetime.now(timezone.utc)
+    refund.student_issue_resolved_at = now
+    refund.updated_at = now
+
+    clean_note = body.note.strip() if (body and body.note) else None
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="RESOLVE_STUDENT_ISSUE",
+        entity_type="clearance_requests",
+        entity_id=req.id,
+        details={"resolution_note": clean_note},
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    return MessageResponse(detail="Student refund issue resolved successfully.")
 
 
 @router.get(
@@ -296,7 +765,7 @@ def mark_refund_processed(
     summary="Get Clearance Request Details for Registrar",
     description=(
         "Returns full request details including student provenance (who uploaded/added to roster), "
-        "masked bank account details, and refund status."
+        "masked bank account details, and full refund timeline."
     ),
     responses={
         403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
@@ -315,7 +784,8 @@ def get_registrar_request_detail(
             joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.programme),
             joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.created_by_user),
             joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.bank_detail),
-            joinedload(ClearanceRequest.refund),
+            joinedload(ClearanceRequest.refund).joinedload(Refund.verified_by_user),
+            joinedload(ClearanceRequest.refund).joinedload(Refund.paid_by_user),
             joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.department),
             joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.decided_by_user),
             joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.added_by_user),
@@ -329,11 +799,11 @@ def get_registrar_request_detail(
     prog_name = r.programme.name if (r and r.programme) else "Unknown"
     bank = r.bank_detail if r else None
 
-    # Fallback to roster security deposit if no refund record yet
-    deposit_amt = req.refund.deposit_amount if req.refund else (r.security_deposit_amount if r else Decimal("0.00"))
-    deductions = req.refund.deductions if req.refund else None
-    final_amt = req.refund.final_amount if req.refund else None
-    refund_st = req.refund.status.value if req.refund else "N/A"
+    ref = req.refund
+    deposit_amt = ref.deposit_amount if ref else (r.security_deposit_amount if r else Decimal("0.00"))
+    deductions = ref.deductions if ref else None
+    final_amt = ref.final_amount if ref else None
+    refund_st = ref.status.value if ref else "N/A"
 
     approval_items = [
         DepartmentApprovalItem(
@@ -358,6 +828,14 @@ def get_registrar_request_detail(
     if r and r.created_by_user:
         creator_name = r.created_by_user.full_name or r.created_by_user.email
 
+    verified_by_name = None
+    if ref and ref.verified_by_user:
+        verified_by_name = ref.verified_by_user.full_name or ref.verified_by_user.email
+
+    paid_by_name = None
+    if ref and ref.paid_by_user:
+        paid_by_name = ref.paid_by_user.full_name or ref.paid_by_user.email
+
     return RegistrarRequestDetailResponse(
         request_id=req.id,
         status=req.status.value,
@@ -376,6 +854,144 @@ def get_registrar_request_detail(
         final_amount=final_amt,
         refund_status=refund_st,
         approvals=approval_items,
+        # Complete timeline fields
+        verified_at=ref.verified_at if ref else None,
+        verified_by_name=verified_by_name,
+        accounts_note=ref.accounts_note if ref else None,
+        paid_at=ref.paid_at if ref else None,
+        paid_by_name=paid_by_name,
+        paid_on=ref.paid_on if ref else None,
+        payment_mode=_payment_mode_str(ref.payment_mode) if ref else None,
+        payment_reference=ref.payment_reference if ref else None,
+        failure_reason=ref.failure_reason if ref else None,
+        failed_at=ref.failed_at if ref else None,
+        student_confirmed_at=ref.student_confirmed_at if ref else None,
+        student_issue_note=ref.student_issue_note if ref else None,
+        student_issue_at=ref.student_issue_at if ref else None,
+        student_issue_resolved_at=ref.student_issue_resolved_at if ref else None,
+    )
+
+
+@router.get(
+    "/refunds/export.csv",
+    status_code=status.HTTP_200_OK,
+    operation_id="export_refunds_csv",
+    summary="Export Refunds to CSV",
+    description=(
+        "Exports a CSV table of refunds filtered by queue tab (TO_VERIFY, TO_PAY, PAID, FAILED, ALL). "
+        "Strictly includes only masked bank account numbers (e.g. '********1234') and never plain accounts. "
+        "Logs an audit entry and requires registrar_accounts role."
+    ),
+    responses={
+        200: {"content": {"text/csv": {}}, "description": "CSV export file"},
+        400: {"model": ErrorResponse, "description": "Invalid tab filter"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-registrar roles"},
+    },
+)
+def export_refunds_csv(
+    db: SessionDep,
+    current_user: User = Depends(require_registrar),
+    tab: str = Query("ALL", description="Filter tab: TO_VERIFY, TO_PAY, PAID, FAILED, ALL"),
+) -> Response:
+    clean_tab = tab.strip().upper()
+    if clean_tab not in ("TO_VERIFY", "TO_PAY", "PAID", "FAILED", "ALL"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid tab '{tab}'. Allowed values are TO_VERIFY, TO_PAY, PAID, FAILED, ALL.",
+        )
+
+    base_query = (
+        select(ClearanceRequest)
+        .join(Refund, ClearanceRequest.id == Refund.request_id)
+        .options(
+            joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.programme),
+            joinedload(ClearanceRequest.roster_entry).joinedload(StudentRoster.bank_detail),
+            joinedload(ClearanceRequest.refund),
+        )
+    )
+
+    if clean_tab == "TO_VERIFY":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.CLEARED,
+            Refund.status == RefundStatus.PENDING_VERIFICATION,
+        )
+    elif clean_tab == "TO_PAY":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.VERIFIED,
+        )
+    elif clean_tab == "PAID":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PROCESSED,
+        )
+    elif clean_tab == "FAILED":
+        tab_filter = and_(
+            ClearanceRequest.status == ClearanceStatus.REFUND_VERIFIED,
+            Refund.status == RefundStatus.PAYMENT_FAILED,
+        )
+    else:  # ALL
+        tab_filter = ClearanceRequest.status.in_([ClearanceStatus.CLEARED, ClearanceStatus.REFUND_VERIFIED])
+
+    requests = db.execute(base_query.where(tab_filter).order_by(ClearanceRequest.id.asc())).scalars().all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "registration_number",
+        "student_name",
+        "programme",
+        "deposit_amount",
+        "deductions",
+        "final_amount",
+        "refund_status",
+        "payment_reference",
+        "paid_on",
+        "payment_mode",
+        "account_number_masked",
+    ])
+
+    for req in requests:
+        r = req.roster_entry
+        b = r.bank_detail if r else None
+        ref = req.refund
+        prog_name = r.programme.name if (r and r.programme) else "N/A"
+        masked_acc = b.masked_account_number if b else "N/A"
+
+        writer.writerow([
+            r.registration_number if r else "N/A",
+            r.name if r else "N/A",
+            prog_name,
+            str(ref.deposit_amount) if ref else "0.00",
+            str(ref.deductions) if (ref and ref.deductions is not None) else "",
+            str(ref.final_amount) if (ref and ref.final_amount is not None) else "",
+            ref.status.value if ref else "N/A",
+            ref.payment_reference or "" if ref else "",
+            str(ref.paid_on) if (ref and ref.paid_on) else "",
+            _payment_mode_str(ref.payment_mode) or "" if ref else "",
+            masked_acc,
+        ])
+
+    csv_data = output.getvalue()
+
+    now = datetime.now(timezone.utc)
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="EXPORT_REFUNDS_CSV",
+        entity_type="refunds",
+        entity_id=None,
+        details={"tab": clean_tab, "count": len(requests)},
+        created_at=now,
+    )
+    db.add(audit)
+    db.commit()
+
+    now_str = now.strftime("%Y%m%d_%H%M%S")
+    filename = f"refunds_export_{clean_tab.lower()}_{now_str}.csv"
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

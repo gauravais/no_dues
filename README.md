@@ -54,10 +54,16 @@ flowchart TD
     Cleared --> CertDownload["Student Downloads Official PDF Certificate"]
     CertDownload --> PublicVerify["Public Third-Party QR Verification<br/>(/verify/{certificate_code})"]
 
-    Cleared --> RegistrarQueue["Registrar & Accounts Queue<br/>(/registrar)"]
-    RegistrarQueue --> VerifyRefund["Audit Deductions & Approve Final Amount<br/>(Status: REFUND_VERIFIED)"]
-    VerifyRefund --> MarkDisbursed["Record Bank UTR / NEFT Reference<br/>(Refund Status: PROCESSED)"]
-    MarkDisbursed --> End([Clearance & Deposit Refund Completed])
+    Cleared --> RegistrarQueue["Accounts & Registrar Queue<br/>(/registrar)"]
+    RegistrarQueue --> VerifyRefund["Audit Deductions & Confirm Net Refund<br/>(Refund Status: VERIFIED)"]
+    VerifyRefund --> MarkDisbursed["Record Bank Reference & Payment Mode<br/>(Refund Status: PROCESSED)"]
+    MarkDisbursed --> StudentConfirm{"Student Receipt Confirmation"}
+    StudentConfirm -- "Confirmed" --> End([Clearance & Deposit Refund Completed])
+    StudentConfirm -- "Problem Reported" --> IssueReview["Accounts Investigates & Resolves"]
+    IssueReview --> MarkDisbursed
+    MarkDisbursed -- "Transfer Failed" --> PaymentFailed["Status: PAYMENT_FAILED"]
+    PaymentFailed --> Retry["Accounts Retries Disbursement"]
+    Retry --> VerifyRefund
 ```
 
 ---

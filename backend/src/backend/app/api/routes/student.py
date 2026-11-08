@@ -1,4 +1,5 @@
 """Student clearance endpoints: initiation, tracking, and resubmissions."""
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select, or_
 from sqlalchemy.orm import joinedload
@@ -21,6 +22,7 @@ from backend.app.schemas.workflow import (
     DeclareLabCoursesRequest,
     StudentCancelRequest,
     DepartmentResponse,
+    StudentRefundConfirmRequest,
 )
 from backend.app.schemas.bank import BankDetailRead, BankDetailUpdate
 from backend.app.schemas.department import (
@@ -37,6 +39,7 @@ from backend.app.services.exceptions import (
     WorkflowBadRequestError,
     WorkflowForbiddenError,
 )
+from backend.app.services.email import notify_student_refund_issue
 from backend.app.services.workflow import (
     create_request,
     add_department_to_request,
@@ -47,6 +50,7 @@ from backend.app.services.workflow import (
     active_officers_for,
 )
 from backend.app.services.certificate_pdf import generate_clearance_certificate_pdf
+from backend.app.services.email import notify_student_refund_issue
 
 router = APIRouter(prefix="/student", tags=["Student"])
 require_student = require_roles(UserRole.student)
@@ -80,26 +84,49 @@ def _format_request_response(req: ClearanceRequest, db: SessionDep | None = None
     ]
 
     refund = req.refund
-    ref_status = refund.status if refund else None
-    dep_amt = refund.deposit_amount if refund else None
-    ded_amt = refund.deductions if refund else None
-    fin_amt = refund.final_amount if refund else None
+    ref_status = None
+    dep_amt = None
+    ded_amt = None
+    fin_amt = None
+    accounts_note = None
     pay_ref = None
+    paid_on = None
+    payment_mode = None
+    failure_reason = None
+    student_confirmed_at = None
+    student_issue_note = None
+    student_issue_at = None
 
-    if refund and refund.status == RefundStatus.PROCESSED:
-        pay_ref = getattr(refund, "payment_reference", None)
-        if not pay_ref and db is not None:
-            audit_entry = db.execute(
-                select(AuditLog)
-                .where(
-                    AuditLog.entity_type == "clearance_requests",
-                    AuditLog.entity_id == req.id,
-                    AuditLog.action == "MARK_REFUND_PROCESSED",
-                )
-                .order_by(AuditLog.created_at.desc())
-            ).scalars().first()
-            if audit_entry and audit_entry.details:
-                pay_ref = audit_entry.details.get("payment_reference")
+    if refund and refund.status != RefundStatus.PENDING_VERIFICATION:
+        ref_status = refund.status
+        dep_amt = refund.deposit_amount
+        ded_amt = refund.deductions
+        fin_amt = refund.final_amount
+        accounts_note = refund.accounts_note
+
+        if refund.status == RefundStatus.PROCESSED:
+            pay_ref = getattr(refund, "payment_reference", None)
+            paid_on = getattr(refund, "paid_on", None)
+            payment_mode = getattr(refund, "payment_mode", None)
+            if not pay_ref and db is not None:
+                audit_entry = db.execute(
+                    select(AuditLog)
+                    .where(
+                        AuditLog.entity_type == "clearance_requests",
+                        AuditLog.entity_id == req.id,
+                        AuditLog.action == "MARK_REFUND_PROCESSED",
+                    )
+                    .order_by(AuditLog.created_at.desc())
+                ).scalars().first()
+                if audit_entry and audit_entry.details:
+                    pay_ref = audit_entry.details.get("payment_reference")
+        elif refund.status == RefundStatus.PAYMENT_FAILED:
+            failure_reason = getattr(refund, "failure_reason", None)
+
+    if refund:
+        student_confirmed_at = getattr(refund, "student_confirmed_at", None)
+        student_issue_note = getattr(refund, "student_issue_note", None)
+        student_issue_at = getattr(refund, "student_issue_at", None)
 
     return CurrentRequestResponse(
         id=req.id,
@@ -112,7 +139,14 @@ def _format_request_response(req: ClearanceRequest, db: SessionDep | None = None
         deposit_amount=dep_amt,
         deductions=ded_amt,
         final_amount=fin_amt,
+        accounts_note=accounts_note,
         payment_reference=pay_ref,
+        paid_on=paid_on,
+        payment_mode=payment_mode,
+        failure_reason=failure_reason,
+        student_confirmed_at=student_confirmed_at,
+        student_issue_note=student_issue_note,
+        student_issue_at=student_issue_at,
     )
 
 
@@ -429,6 +463,7 @@ def get_bank_details(
     responses={
         400: {"model": ErrorResponse, "description": "Invalid bank details or missing roster entry"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-student roles"},
+        409: {"model": ErrorResponse, "description": "Bank details cannot be modified after refund has been processed"},
     },
 )
 def update_bank_details(
@@ -438,6 +473,20 @@ def update_bank_details(
 ) -> BankDetailRead:
     if not student_user.roster_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Student roster profile not found")
+
+    processed_refund = db.execute(
+        select(Refund)
+        .join(ClearanceRequest, Refund.request_id == ClearanceRequest.id)
+        .where(
+            ClearanceRequest.roster_id == student_user.roster_id,
+            Refund.status == RefundStatus.PROCESSED,
+        )
+    ).scalars().first()
+    if processed_refund:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Bank details cannot be modified after refund has been processed.",
+        )
 
     bank = db.execute(
         select(BankDetail).where(BankDetail.roster_id == student_user.roster_id)
@@ -459,6 +508,21 @@ def update_bank_details(
         )
         db.add(bank)
 
+    db.flush()
+
+    audit = AuditLog(
+        user_id=student_user.id,
+        action="UPDATE_BANK_DETAILS",
+        entity_type="bank_details",
+        entity_id=bank.id,
+        details={
+            "account_number_masked": mask_account_number(bank.account_number),
+            "ifsc_code": bank.ifsc_code,
+            "account_holder_name": bank.account_holder_name,
+            "bank_address": bank.bank_address,
+        },
+    )
+    db.add(audit)
     db.commit()
     db.refresh(bank)
 
@@ -468,6 +532,97 @@ def update_bank_details(
         account_holder_name=bank.account_holder_name,
         bank_address=bank.bank_address,
     )
+
+
+@router.post(
+    "/requests/{request_id}/refund/confirm",
+    response_model=CurrentRequestResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="confirm_refund_received",
+    summary="Confirm Refund Receipt or Report Issue",
+    description=(
+        "Student confirms receipt of their refunded deposit once PROCESSED, or reports an issue/delay with a mandatory note "
+        "when PROCESSED or PAYMENT_FAILED."
+    ),
+    responses={
+        400: {"model": ErrorResponse, "description": "Mandatory issue note missing or invalid"},
+        403: {"model": ErrorResponse, "description": "Forbidden: not your clearance request"},
+        404: {"model": ErrorResponse, "description": "Clearance request or refund record not found"},
+        409: {"model": ErrorResponse, "description": "Invalid refund status for this action"},
+    },
+)
+def confirm_or_report_refund(
+    request_id: int,
+    body: StudentRefundConfirmRequest,
+    db: SessionDep,
+    student_user: User = Depends(require_student),
+) -> CurrentRequestResponse:
+    req = db.execute(
+        select(ClearanceRequest)
+        .where(ClearanceRequest.id == request_id)
+        .options(
+            joinedload(ClearanceRequest.refund),
+            joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.department),
+            joinedload(ClearanceRequest.approvals).joinedload(DepartmentApproval.decided_by_user),
+        )
+    ).scalars().first()
+
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Clearance request not found")
+
+    if req.roster_id != student_user.roster_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied to this clearance request")
+
+    refund = req.refund
+    if not refund:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Refund record not found for this request")
+
+    now = datetime.now(timezone.utc)
+    if body.received:
+        if refund.status != RefundStatus.PROCESSED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Refund receipt can only be confirmed when status is PROCESSED (current: {refund.status.value}).",
+            )
+        refund.student_confirmed_at = now
+        audit = AuditLog(
+            user_id=student_user.id,
+            action="CONFIRM_REFUND_RECEIVED",
+            entity_type="clearance_requests",
+            entity_id=req.id,
+            details={"refund_id": refund.id},
+        )
+        db.add(audit)
+    else:
+        if refund.status not in (RefundStatus.PROCESSED, RefundStatus.PAYMENT_FAILED):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Refund issues can only be reported when status is PROCESSED or PAYMENT_FAILED (current: {refund.status.value}).",
+            )
+        cleaned_note = body.note.strip() if body.note else ""
+        if not cleaned_note:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A non-empty note is required when reporting a refund issue.",
+            )
+        refund.student_issue_note = cleaned_note
+        refund.student_issue_at = now
+        refund.student_issue_resolved_at = None
+
+        notify_student_refund_issue(db, req, cleaned_note)
+
+        audit = AuditLog(
+            user_id=student_user.id,
+            action="REPORT_REFUND_ISSUE",
+            entity_type="clearance_requests",
+            entity_id=req.id,
+            details={"refund_id": refund.id, "note": cleaned_note},
+        )
+        db.add(audit)
+
+    db.commit()
+    db.refresh(req)
+    return _format_request_response(req, db)
 
 
 @router.get(

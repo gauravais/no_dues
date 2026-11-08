@@ -2,15 +2,18 @@ import api from '@/lib/axios'
 
 export const registrarApi = {
   /**
-   * Get paginated requests queue
+   * Get paginated requests queue filtered by tab or status
    * @param {Object} params
-   * @param {string} [params.status='CLEARED'] - CLEARED or REFUND_VERIFIED
+   * @param {string} [params.tab] - TO_VERIFY, TO_PAY, PAID, FAILED, ALL
+   * @param {string} [params.status] - Legacy status: CLEARED or REFUND_VERIFIED
    * @param {number} [params.limit=50]
    * @param {number} [params.offset=0]
    */
-  async getQueue({ status = 'CLEARED', limit = 50, offset = 0 } = {}) {
+  async getQueue({ tab, status, limit = 50, offset = 0 } = {}) {
     const params = { limit, offset }
-    if (status) {
+    if (tab) {
+      params.tab = tab
+    } else if (status) {
       params.status = status
     }
     const response = await api.get('/registrar/queue', { params })
@@ -18,7 +21,7 @@ export const registrarApi = {
   },
 
   /**
-   * Get full registrar request detail including student info, masked bank, approvals, and roster provenance
+   * Get full registrar request detail including student info, masked bank, approvals, roster provenance, and timeline
    * @param {number} requestId
    */
   async getRequestDetail(requestId) {
@@ -48,16 +51,86 @@ export const registrarApi = {
   },
 
   /**
-   * Mark refund processed / disbursed with bank transaction UTR/NEFT reference
+   * Reopen verified refund back to PENDING_VERIFICATION
+   * @param {number} requestId
+   * @param {Object} data
+   * @param {string} data.reason
+   */
+  async reopenVerification(requestId, { reason }) {
+    const response = await api.post(`/registrar/requests/${requestId}/reopen-verification`, {
+      reason: reason?.trim(),
+    })
+    return response.data
+  },
+
+  /**
+   * Mark refund processed / disbursed with bank transaction reference
    * Requires refund to already be in VERIFIED status
-   * Transitions refund status to PROCESSED
    * @param {number} requestId
    * @param {Object} data
    * @param {string} data.payment_reference
+   * @param {string} [data.paid_on]
+   * @param {string} [data.payment_mode]
    */
-  async markProcessed(requestId, { payment_reference }) {
-    const response = await api.post(`/registrar/requests/${requestId}/mark-processed`, {
+  async markProcessed(requestId, { payment_reference, paid_on, payment_mode }) {
+    const payload = {
       payment_reference: payment_reference?.trim(),
+    }
+    if (paid_on) {
+      payload.paid_on = paid_on
+    }
+    if (payment_mode) {
+      payload.payment_mode = payment_mode
+    }
+    const response = await api.post(`/registrar/requests/${requestId}/mark-processed`, payload)
+    return response.data
+  },
+
+  /**
+   * Mark disbursement as failed
+   * @param {number} requestId
+   * @param {Object} data
+   * @param {string} data.reason
+   */
+  async markFailed(requestId, { reason }) {
+    const response = await api.post(`/registrar/requests/${requestId}/mark-failed`, {
+      reason: reason?.trim(),
+    })
+    return response.data
+  },
+
+  /**
+   * Retry failed refund payment (transitions PAYMENT_FAILED -> VERIFIED)
+   * @param {number} requestId
+   */
+  async retryPayment(requestId) {
+    const response = await api.post(`/registrar/requests/${requestId}/retry-payment`)
+    return response.data
+  },
+
+  /**
+   * Resolve student-reported refund issue
+   * @param {number} requestId
+   * @param {Object} [data]
+   * @param {string} [data.note]
+   */
+  async resolveIssue(requestId, { note } = {}) {
+    const payload = {}
+    if (note) {
+      payload.note = note.trim()
+    }
+    const response = await api.post(`/registrar/requests/${requestId}/resolve-issue`, payload)
+    return response.data
+  },
+
+  /**
+   * Export refunds list as CSV blob
+   * @param {string} [tab='ALL']
+   */
+  async exportCsv(tab = 'ALL') {
+    const response = await api.get('/registrar/refunds/export.csv', {
+      params: { tab },
+      responseType: 'blob',
     })
     return response.data
   },

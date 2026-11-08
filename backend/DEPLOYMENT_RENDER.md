@@ -249,7 +249,36 @@ After deploying the Docker container with migration 0012 to Render:
 
 ---
 
-## 12. Rollback Procedure
+## 12. Migration 0013: Complete Refund Loop Deployment & Verification
+
+> [!IMPORTANT]
+> **Take a pg_dump backup before deploying this migration**:
+> ```bash
+> pg_dump "postgresql://user:password@neon-host/dbname?sslmode=require" -F c -b -v -f nodues_backup_before_0013.dump
+> ```
+> Migration `0013_complete_refund_loop` enforces that each student may only have one non-cancelled clearance request, adds `PAYMENT_FAILED` to the `refund_status` enum, and adds full refund audit and timeline columns. If any students currently have duplicate non-cancelled requests in the database, the migration will abort and output their roster IDs.
+
+### Post-Deploy Verification:
+- [ ] Verify migration head: `DATABASE_URL="..." uv run --project backend alembic current` reports `0013_complete_refund_loop (head)`.
+- [ ] Verify registrar refund queue (`GET /registrar/queue`):
+  - Returns tabs `TO_VERIFY`, `TO_PAY`, `PAID`, `FAILED`, `ALL` with tab counts.
+  - Returns aggregate `total_to_pay_amount` and `total_paid_amount`.
+  - Queue items indicate `student_issue_open: bool`.
+- [ ] Verify student current request view (`GET /student/requests/current`):
+  - Financial fields (`deposit_amount`, `deductions`, `final_amount`, `refund_status`) are `null` prior to verification.
+  - After verification, amounts and `accounts_note` appear.
+  - After disbursement (`PROCESSED`), `payment_reference`, `paid_on`, and `payment_mode` are visible.
+- [ ] Verify CSV export (`GET /registrar/refunds/export.csv?tab=ALL`):
+  - Returns valid CSV file restricted to `registrar_accounts` role (returns 403 for other roles).
+  - All account numbers are masked (e.g. `********1234`), never revealing full plain account numbers.
+  - Logs `EXPORT_REFUNDS_CSV` audit trail entry.
+- [ ] Verify duplicate request prevention:
+  - Applying for clearance when an active or cleared request exists returns `409 Conflict` ("Only one non-cancelled clearance request is permitted per student.").
+  - Applying after cancellation is permitted.
+
+---
+
+## 13. Rollback Procedure
 
 If a deployed version causes errors:
 1. In Render Dashboard -> `nodues-backend` -> **Deploys**.

@@ -318,13 +318,13 @@ def test_16_registrar_refund_verification_and_limits(client: TestClient, db_sess
     assert v_data["request_status"] == "REFUND_VERIFIED"
     assert Decimal(str(v_data["final_amount"])) == deposit - Decimal(str(deduction_val))
 
-    # 5. Attempt to verify again -> 400 (not in CLEARED status anymore)
+    # 5. Attempt to verify again -> 409 (not in CLEARED status anymore)
     repeat_verify_res = client.post(
         f"/registrar/requests/{cleared_req.id}/verify-refund",
         json={"deductions": 0, "remarks": "Repeat"},
         headers=reg_headers,
     )
-    assert repeat_verify_res.status_code == 400
+    assert repeat_verify_res.status_code == 409
 
     # 6. Mark processed
     proc_res = client.post(

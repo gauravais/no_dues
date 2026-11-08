@@ -60,6 +60,9 @@ import {
   Info,
   CheckCircle2,
   XCircle,
+  Copy,
+  Check,
+  AlertCircle,
 } from 'lucide-react'
 
 export function StudentDashboard() {
@@ -101,6 +104,13 @@ export function StudentDashboard() {
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
   const [cancelSubmitting, setCancelSubmitting] = useState(false)
+
+  // State for Refund Confirmation & Issue Reporting
+  const [confirmReceivedOpen, setConfirmReceivedOpen] = useState(false)
+  const [confirmReceivedSubmitting, setConfirmReceivedSubmitting] = useState(false)
+  const [confirmIssueOpen, setConfirmIssueOpen] = useState(false)
+  const [issueNote, setIssueNote] = useState('')
+  const [issueSubmitting, setIssueSubmitting] = useState(false)
 
   // 1. Fetch Bank Details
   const {
@@ -176,6 +186,10 @@ export function StudentDashboard() {
   // Bank Details submission
   const handleBankSubmit = async (e) => {
     e.preventDefault()
+    if (currentRequest?.refund_status === 'PROCESSED') {
+      toast.error('Bank details cannot be modified after refund has been processed.')
+      return
+    }
     const { accountNumber, ifscCode, accountHolderName, bankAddress } = bankForm
 
     const cleanAccount = accountNumber.trim()
@@ -347,6 +361,44 @@ export function StudentDashboard() {
     }
   }
 
+  // Handle Student Confirm Refund Receipt
+  const handleConfirmRefundReceived = async () => {
+    if (!currentRequest) return
+    setConfirmReceivedSubmitting(true)
+    try {
+      await studentApi.confirmRefund(currentRequest.id, { received: true })
+      toast.success('Thank you! Refund receipt confirmed.')
+      setConfirmReceivedOpen(false)
+      refetchRequest()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to confirm refund receipt.')
+    } finally {
+      setConfirmReceivedSubmitting(false)
+    }
+  }
+
+  // Handle Student Report Refund Issue
+  const handleReportRefundIssue = async (e) => {
+    e?.preventDefault?.()
+    if (!currentRequest) return
+    if (!issueNote.trim()) {
+      toast.error('Please describe the issue before submitting.')
+      return
+    }
+    setIssueSubmitting(true)
+    try {
+      await studentApi.confirmRefund(currentRequest.id, { received: false, note: issueNote.trim() })
+      toast.success('Your issue has been reported to the Accounts Branch.')
+      setConfirmIssueOpen(false)
+      setIssueNote('')
+      refetchRequest()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to report refund issue.')
+    } finally {
+      setIssueSubmitting(false)
+    }
+  }
+
   // Progress calculations
   const approvals = currentRequest?.approvals || []
   const approvedCount = approvals.filter((a) => a.status === 'APPROVED').length
@@ -498,7 +550,7 @@ export function StudentDashboard() {
               </div>
 
               {/* Stat 3: Refund Bank Status */}
-              <div className="rounded-xl border border-border bg-white p-4 shadow-2xs space-y-1 flex flex-col justify-between">
+              <div id="student-bank-card" className="rounded-xl border border-border bg-white p-4 shadow-2xs space-y-1 flex flex-col justify-between">
                 <div>
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block">
                     Security Deposit Refund
@@ -511,13 +563,27 @@ export function StudentDashboard() {
                   <span className="text-[11px] text-zinc-500">
                     {bankDetails ? bankDetails.ifsc_code : 'Required for apply'}
                   </span>
-                  <button
-                    onClick={() => setBankModalOpen(true)}
-                    className="text-[11px] font-semibold text-black hover:underline"
-                  >
-                    {bankDetails ? 'Edit' : 'Register'}
-                  </button>
+                  {currentRequest?.refund_status === 'PROCESSED' ? (
+                    <span
+                      className="text-[11px] font-semibold text-zinc-400 cursor-not-allowed"
+                      title="Bank details cannot be modified after refund has been processed."
+                    >
+                      Locked
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => setBankModalOpen(true)}
+                      className="text-[11px] font-semibold text-black hover:underline"
+                    >
+                      {bankDetails ? 'Edit' : 'Register'}
+                    </button>
+                  )}
                 </div>
+                {currentRequest?.refund_status === 'PROCESSED' && (
+                  <p className="text-[10px] text-zinc-400 pt-1 leading-tight">
+                    Bank details cannot be modified after refund has been processed.
+                  </p>
+                )}
               </div>
 
               {/* Stat 4: Fast Action Card */}
@@ -530,6 +596,8 @@ export function StudentDashboard() {
                     ? 'Register bank details or start application'
                     : !currentRequest
                     ? 'Submit your clearance declarations'
+                    : currentRequest.status === 'CANCELLED'
+                    ? 'Clearance was cancelled. You can apply again.'
                     : hasRejectedDepts
                     ? 'Resolve dues with flagged department'
                     : showHodBanner
@@ -540,7 +608,9 @@ export function StudentDashboard() {
                 </div>
                 <div className="pt-1">
                   <span className="text-[10px] font-mono text-zinc-400">
-                    SVSU Clearance Protocol
+                    {currentRequest && currentRequest.status !== 'CANCELLED'
+                      ? 'Your deposit can be refunded once.'
+                      : 'SVSU Clearance Protocol'}
                   </span>
                 </div>
               </div>
@@ -576,11 +646,15 @@ export function StudentDashboard() {
               </Alert>
             )}
 
-            {/* Refund Summary (when provided by API) */}
+            {/* Student Refund Card */}
             {Boolean(
-              currentRequest?.refund_status ||
-              (currentRequest?.deposit_amount !== null && currentRequest?.deposit_amount !== undefined) ||
-              currentRequest?.refund
+              currentRequest &&
+              currentRequest.status !== 'CANCELLED' &&
+              (currentRequest.status === 'CLEARED' ||
+                currentRequest.status === 'REFUND_VERIFIED' ||
+                currentRequest.refund_status ||
+                (currentRequest.deposit_amount !== null && currentRequest.deposit_amount !== undefined) ||
+                currentRequest.refund)
             ) && (
               <Card className="border-border bg-white shadow-2xs">
                 <CardHeader className="p-5 pb-3">
@@ -588,7 +662,7 @@ export function StudentDashboard() {
                     <div className="flex items-center gap-2">
                       <Landmark className="w-4 h-4 text-zinc-700" />
                       <CardTitle className="text-sm font-bold text-zinc-950">
-                        Security Deposit Refund Summary
+                        Security Deposit Refund
                       </CardTitle>
                     </div>
                     {currentRequest.refund_status && (
@@ -597,6 +671,8 @@ export function StudentDashboard() {
                         className={`text-[10px] uppercase font-mono tracking-wider ${
                           currentRequest.refund_status === 'PROCESSED'
                             ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : currentRequest.refund_status === 'PAYMENT_FAILED'
+                            ? 'bg-red-50 text-red-800 border-red-200'
                             : currentRequest.refund_status === 'VERIFIED'
                             ? 'bg-blue-50 text-blue-800 border-blue-200'
                             : 'bg-amber-50 text-amber-800 border-amber-200'
@@ -607,58 +683,280 @@ export function StudentDashboard() {
                     )}
                   </div>
                 </CardHeader>
-                <CardContent className="p-5 pt-0 space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                    <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
-                      <span className="text-[11px] text-zinc-500 block">Original Deposit</span>
-                      <span className="text-sm font-bold font-mono text-zinc-900">
-                        ₹{currentRequest.deposit_amount ?? currentRequest.refund?.security_deposit_amount ?? '0.00'}
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
-                      <span className="text-[11px] text-zinc-500 block">Deductions Applied</span>
-                      <span className="text-sm font-bold font-mono text-rose-600">
-                        -₹{currentRequest.deductions ?? currentRequest.refund?.deductions ?? '0.00'}
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-lg bg-emerald-50/60 border border-emerald-200">
-                      <span className="text-[11px] text-emerald-800 font-semibold block">Net Refund Amount</span>
-                      <span className="text-sm font-bold font-mono text-emerald-700">
-                        ₹{currentRequest.final_amount ?? currentRequest.refund?.final_amount ?? '0.00'}
-                      </span>
-                    </div>
-                  </div>
+                <CardContent className="p-5 pt-0 space-y-4">
+                  {/* Four-step progress line */}
+                  {(() => {
+                    const step1Done = currentRequest.status === 'CLEARED' || currentRequest.status === 'REFUND_VERIFIED'
+                    const step2Done =
+                      currentRequest.refund_status === 'VERIFIED' ||
+                      currentRequest.refund_status === 'PROCESSED' ||
+                      currentRequest.refund_status === 'PAYMENT_FAILED'
+                    const step3Done = currentRequest.refund_status === 'PROCESSED'
+                    const step3Failed = currentRequest.refund_status === 'PAYMENT_FAILED'
+                    const step4Done = Boolean(currentRequest.student_confirmed_at)
 
-                  {currentRequest.payment_reference && (
-                    <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                      <div className="flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <div>
-                          <span className="font-semibold text-zinc-900 block">
-                            Bank Disbursement Processed
+                    const refundSteps = [
+                      {
+                        num: 1,
+                        label: 'Clearance complete',
+                        done: step1Done,
+                        active: !step1Done && currentRequest.status !== 'CANCELLED',
+                      },
+                      {
+                        num: 2,
+                        label: 'Accounts verification',
+                        done: step2Done,
+                        active: step1Done && !step2Done,
+                      },
+                      {
+                        num: 3,
+                        label: 'Bank transfer',
+                        done: step3Done,
+                        failed: step3Failed,
+                        active: currentRequest.refund_status === 'VERIFIED',
+                      },
+                      {
+                        num: 4,
+                        label: 'Completed',
+                        done: step4Done,
+                        active: step3Done && !step4Done,
+                      },
+                    ]
+
+                    return (
+                      <div className="py-2">
+                        <div className="grid grid-cols-4 gap-2 relative">
+                          {refundSteps.map((s) => (
+                            <div key={s.num} className="flex flex-col items-center text-center relative z-10">
+                              <div
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold font-mono transition-colors ${
+                                  s.done
+                                    ? 'bg-emerald-600 text-white'
+                                    : s.failed
+                                    ? 'bg-red-600 text-white'
+                                    : s.active
+                                    ? 'bg-zinc-950 text-white ring-4 ring-zinc-100'
+                                    : 'bg-zinc-100 text-zinc-400 border border-zinc-200'
+                                }`}
+                              >
+                                {s.done ? (
+                                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                                ) : s.failed ? (
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                ) : (
+                                  s.num
+                                )}
+                              </div>
+                              <span
+                                className={`text-[11px] mt-1.5 font-medium leading-tight ${
+                                  s.done
+                                    ? 'text-emerald-800'
+                                    : s.failed
+                                    ? 'text-red-700'
+                                    : s.active
+                                    ? 'text-zinc-950 font-semibold'
+                                    : 'text-zinc-400'
+                                }`}
+                              >
+                                {s.label}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* Amounts Grid */}
+                  {currentRequest.deposit_amount !== null && currentRequest.deposit_amount !== undefined ? (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                        <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                          <span className="text-[11px] text-zinc-500 block">Original Deposit</span>
+                          <span className="text-sm font-bold font-mono text-zinc-900">
+                            ₹{Number(currentRequest.deposit_amount).toLocaleString('en-IN')}
                           </span>
-                          <span className="text-[11px] text-zinc-500">
-                            Transferred to registered bank account {bankDetails?.account_number ? `(${bankDetails.account_number})` : ''}
+                        </div>
+                        <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                          <span className="text-[11px] text-zinc-500 block">Deductions Applied</span>
+                          <span className="text-sm font-bold font-mono text-rose-600">
+                            -₹{Number(currentRequest.deductions || 0).toLocaleString('en-IN')}
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg bg-emerald-50/60 border border-emerald-200">
+                          <span className="text-[11px] text-emerald-800 font-semibold block">Net Refund Amount</span>
+                          <span className="text-sm font-bold font-mono text-emerald-700">
+                            ₹{Number(
+                              currentRequest.final_amount ??
+                              (Number(currentRequest.deposit_amount) - Number(currentRequest.deductions || 0))
+                            ).toLocaleString('en-IN')}
                           </span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 font-mono text-xs bg-white px-2.5 py-1 rounded border border-zinc-200 text-zinc-800">
-                        <span className="text-zinc-400 font-sans text-[10px] uppercase font-semibold">UTR / Ref:</span>
-                        <span className="font-bold">{currentRequest.payment_reference}</span>
+
+                      {/* Accounts Note in a labelled box */}
+                      {currentRequest.accounts_note && (
+                        <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 space-y-1">
+                          <span className="text-[11px] font-semibold text-zinc-700 block">
+                            Accounts Note
+                          </span>
+                          <p className="text-xs text-zinc-600 leading-relaxed">
+                            {currentRequest.accounts_note}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+                        <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                          <span className="text-[11px] text-zinc-500 block">Original Deposit</span>
+                          <span className="text-xs font-medium text-zinc-500 italic">
+                            To be confirmed by Accounts
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                          <span className="text-[11px] text-zinc-500 block">Deductions Applied</span>
+                          <span className="text-xs font-medium text-zinc-500 italic">
+                            To be confirmed by Accounts
+                          </span>
+                        </div>
+                        <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200">
+                          <span className="text-[11px] text-zinc-500 block">Net Refund Amount</span>
+                          <span className="text-xs font-medium text-zinc-500 italic">
+                            To be confirmed by Accounts
+                          </span>
+                        </div>
                       </div>
+
+                      <p className="text-xs text-zinc-500 italic">
+                        Accounts will confirm your deposit amount and any deductions. You will see them here.
+                      </p>
                     </div>
                   )}
 
-                  {!currentRequest.payment_reference && currentRequest.refund_status === 'VERIFIED' && (
-                    <p className="text-[11px] text-zinc-500 italic">
-                      Deductions verified by Accounts Branch. Electronic bank transfer is queued for disbursement.
-                    </p>
+                  {/* Payment Failed Alert with Scroll to Bank Card */}
+                  {currentRequest.refund_status === 'PAYMENT_FAILED' && (
+                    <Alert className="bg-red-50/90 border-red-200 text-red-950 p-4">
+                      <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
+                      <div className="flex-1 ml-2">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <AlertTitle className="text-sm font-semibold tracking-tight">
+                              Disbursement Failed
+                            </AlertTitle>
+                            <AlertDescription className="text-xs mt-1 text-red-800 leading-relaxed">
+                              {currentRequest.failure_reason || 'Bank disbursement could not be processed.'}
+                            </AlertDescription>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              document.getElementById('student-bank-card')?.scrollIntoView({ behavior: 'smooth' })
+                            }}
+                            className="bg-red-900 hover:bg-red-950 text-white text-xs shrink-0"
+                          >
+                            Check your bank details
+                          </Button>
+                        </div>
+                      </div>
+                    </Alert>
                   )}
 
-                  {!currentRequest.payment_reference && currentRequest.refund_status === 'PENDING_VERIFICATION' && (
-                    <p className="text-[11px] text-zinc-500 italic">
-                      Clearance complete. Accounts Branch is currently auditing library/hostel records against deposit ledger.
-                    </p>
+                  {/* Student Open Issue Display */}
+                  {currentRequest.student_issue_note && (
+                    <div className="p-3 rounded-lg bg-amber-50/70 border border-amber-200 text-amber-950 space-y-1 text-xs">
+                      <div className="flex items-center gap-1.5 font-semibold text-amber-900">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                        <span>Problem Reported by You</span>
+                        {currentRequest.student_issue_at && (
+                          <span className="text-[10px] text-amber-700/80 font-normal ml-auto">
+                            {new Date(currentRequest.student_issue_at).toLocaleDateString()}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-xs text-amber-900 leading-relaxed font-mono bg-white/70 p-2 rounded border border-amber-200/60">
+                        "{currentRequest.student_issue_note}"
+                      </p>
+                      <p className="text-[11px] text-amber-800">
+                        Accounts Branch has been notified and will review your issue.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* When PROCESSED: Payment details & Action buttons */}
+                  {currentRequest.refund_status === 'PROCESSED' && (
+                    <div className="space-y-3 pt-1">
+                      <div className="p-3.5 rounded-lg bg-zinc-50 border border-zinc-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                        <div className="flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <div>
+                            <span className="font-semibold text-zinc-900 block">
+                              Bank Disbursement Processed
+                            </span>
+                            <span className="text-[11px] text-zinc-500">
+                              Paid on{' '}
+                              {currentRequest.paid_on
+                                ? new Date(currentRequest.paid_on).toLocaleDateString()
+                                : 'recorded date'}{' '}
+                              via {currentRequest.payment_mode || 'Bank Transfer'}{' '}
+                              {bankDetails?.account_number_masked ? `to ${bankDetails.account_number_masked}` : ''}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 self-start sm:self-auto">
+                          <div className="flex items-center gap-1.5 font-mono text-xs bg-white px-2.5 py-1 rounded border border-zinc-200 text-zinc-800">
+                            <span className="text-zinc-400 font-sans text-[10px] uppercase font-semibold">Ref:</span>
+                            <span className="font-bold">{currentRequest.payment_reference || 'N/A'}</span>
+                          </div>
+                          {currentRequest.payment_reference && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                navigator.clipboard.writeText(currentRequest.payment_reference)
+                                toast.success('Payment reference copied to clipboard.')
+                              }}
+                              className="h-7 px-2 text-xs border-zinc-200 bg-white hover:bg-zinc-100"
+                              title="Copy reference"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Student confirmation status or action buttons */}
+                      {currentRequest.student_confirmed_at ? (
+                        <div className="p-3 rounded-lg bg-emerald-50/70 border border-emerald-200 text-emerald-950 flex items-center gap-2 text-xs">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                          <span className="font-medium">
+                            Refund receipt confirmed by you on{' '}
+                            {new Date(currentRequest.student_confirmed_at).toLocaleDateString()}.
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setConfirmIssueOpen(true)}
+                            className="text-xs text-rose-700 border-rose-200 hover:bg-rose-50 hover:text-rose-800 h-8 gap-1.5"
+                          >
+                            <AlertCircle className="w-3.5 h-3.5" />
+                            I did not receive it / there is a problem
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => setConfirmReceivedOpen(true)}
+                            className="text-xs bg-emerald-700 hover:bg-emerald-800 text-white h-8 gap-1.5 font-semibold"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            I received the refund
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -1387,6 +1685,87 @@ export function StudentDashboard() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {/* Dialog: Confirm Refund Receipt */}
+      <AlertDialog open={confirmReceivedOpen} onOpenChange={setConfirmReceivedOpen}>
+        <AlertDialogContent className="bg-white p-6 max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950">
+              Confirm Refund Receipt
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-zinc-600 leading-relaxed">
+              Please confirm that you have received the security deposit refund disbursement in your registered bank account.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel disabled={confirmReceivedSubmitting} className="text-xs h-9">
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                handleConfirmRefundReceived()
+              }}
+              disabled={confirmReceivedSubmitting}
+              className="bg-emerald-700 hover:bg-emerald-800 text-white text-xs h-9 font-semibold"
+            >
+              {confirmReceivedSubmitting ? 'Confirming...' : 'Yes, I received the refund'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Dialog: Report Refund Issue */}
+      <Dialog open={confirmIssueOpen} onOpenChange={setConfirmIssueOpen}>
+        <DialogContent className="sm:max-w-md bg-white p-6">
+          <form onSubmit={handleReportRefundIssue}>
+            <DialogHeader className="pb-3">
+              <DialogTitle className="font-heading font-bold text-base text-zinc-950">
+                Report Refund Issue
+              </DialogTitle>
+              <DialogDescription className="text-xs text-zinc-600">
+                Provide details regarding the disbursement discrepancy. The Accounts Branch will review your submission.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-2 text-xs">
+              <div className="space-y-1.5">
+                <Label htmlFor="issueNote" className="text-xs font-semibold text-zinc-800">
+                  Problem Description <span className="text-destructive">*</span>
+                </Label>
+                <Textarea
+                  id="issueNote"
+                  value={issueNote}
+                  onChange={(e) => setIssueNote(e.target.value)}
+                  placeholder="e.g. Credit not received, incorrect deduction applied, or wrong account beneficiary..."
+                  rows={4}
+                  required
+                  className="text-xs resize-none"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-3 border-t border-zinc-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmIssueOpen(false)}
+                className="text-xs h-9"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={!issueNote.trim() || issueSubmitting}
+                className="bg-rose-700 hover:bg-rose-800 text-white text-xs h-9 font-semibold"
+              >
+                {issueSubmitting ? 'Submitting...' : 'Submit Issue to Accounts'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   )
 }

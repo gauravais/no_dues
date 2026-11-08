@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   CheckCircle2,
   Building2,
+  Landmark,
 } from 'lucide-react'
 
 export function HelpPage() {
@@ -229,6 +230,49 @@ export function HelpPage() {
                 <strong>Academic Scope:</strong> Access to the student roster and laboratory catalog is granted whenever an officer belongs to at least one academic department, with scope selectors available to narrow records by academic department.
               </li>
             </ul>
+          </CardContent>
+        </Card>
+
+        {/* Security Deposit Refund Guidance */}
+        <Card className="border-border bg-white shadow-card">
+          <CardHeader className="p-6 pb-3">
+            <div className="flex items-center gap-2.5">
+              <Landmark className="w-4 h-4 text-zinc-700" />
+              <CardTitle className="text-sm font-bold text-zinc-900">
+                Security Deposit Refund & Payout Guide
+              </CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent className="p-6 pt-0 text-xs text-zinc-600 leading-relaxed space-y-4">
+            <div>
+              <h3 className="font-semibold text-zinc-900 mb-1.5 text-xs">For Graduating & Exiting Students</h3>
+              <ul className="list-disc list-inside space-y-1 text-zinc-600 pl-1">
+                <li>
+                  <strong>Bank Account:</strong> Ensure your registered bank account details (account number, IFSC code, and account holder name) match your bank passbook before clearance finishes. Bank details cannot be modified after refund has been processed.
+                </li>
+                <li>
+                  <strong>Accounts Verification:</strong> After all departments grant clearance, the Accounts Branch audits your security deposit against university ledgers. Verified amounts and any deductions will appear on your dashboard.
+                </li>
+                <li>
+                  <strong>Disbursement & Receipt:</strong> When payment is processed, the bank transaction reference and payment date appear on your refund card. Confirm receipt once received, or report any discrepancy directly to the Accounts Branch.
+                </li>
+              </ul>
+            </div>
+
+            <div className="pt-3 border-t border-zinc-100">
+              <h3 className="font-semibold text-zinc-900 mb-1.5 text-xs">For Accounts & Finance Officers</h3>
+              <ul className="list-disc list-inside space-y-1 text-zinc-600 pl-1">
+                <li>
+                  <strong>Verification Queue:</strong> Review requests awaiting deposit reconciliation under "To verify", confirm security deposit amounts, assess any dues or deductions, and record remarks.
+                </li>
+                <li>
+                  <strong>Bank Disbursement:</strong> View student beneficiary details using the audited reveal tool prior to payment, initiate bank disbursement, and record the payment reference and payment mode under "To pay".
+                </li>
+                <li>
+                  <strong>Discrepancy Handling & Export:</strong> Export masked CSV records for auditing, retry disbursements if a transfer fails, and investigate student-reported disbursement problems.
+                </li>
+              </ul>
+            </div>
           </CardContent>
         </Card>
 

@@ -1,5 +1,5 @@
 """Pydantic schemas for clearance requests, approvals, and queue management."""
-from datetime import datetime
+from datetime import datetime, date
 from decimal import Decimal
 from pydantic import BaseModel, Field
 from backend.app.models.clearance import ApprovalStatus, ClearanceStatus
@@ -37,7 +37,20 @@ class CurrentRequestResponse(BaseModel):
     deposit_amount: Decimal | None = Field(None, description="Security deposit amount", examples=[Decimal("5000.00")])
     deductions: Decimal | None = Field(None, description="Total deductions applied by accounts", examples=[Decimal("250.00")])
     final_amount: Decimal | None = Field(None, description="Net refund amount to be paid to student", examples=[Decimal("4750.00")])
+    accounts_note: str | None = Field(None, description="Remarks from accounts branch explaining verification or deductions", examples=["Hostel clearance complete"])
     payment_reference: str | None = Field(None, description="Payment reference (NEFT/RTGS transaction ID) when PROCESSED", examples=["NEFT_SVSU_20261030_0099"])
+    paid_on: date | None = Field(None, description="Date payment was disbursed to bank", examples=["2026-11-08"])
+    payment_mode: str | None = Field(None, description="Disbursement payment mode: NEFT, IMPS, UPI, CHEQUE, OTHER", examples=["NEFT"])
+    failure_reason: str | None = Field(None, description="Reason why bank transaction failed (when PAYMENT_FAILED)", examples=["Bank account inactive"])
+    student_confirmed_at: datetime | None = Field(None, description="Timestamp when student confirmed receipt of funds")
+    student_issue_note: str | None = Field(None, description="Note provided by student reporting a refund issue")
+    student_issue_at: datetime | None = Field(None, description="Timestamp when student reported issue")
+
+
+class StudentRefundConfirmRequest(BaseModel):
+    """Payload for student to confirm refund receipt or report an issue."""
+    received: bool = Field(..., description="True if student confirmed funds received, False if reporting issue")
+    note: str | None = Field(None, max_length=500, description="Mandatory issue description if received is False")
 
 
 class DecisionRequest(BaseModel):

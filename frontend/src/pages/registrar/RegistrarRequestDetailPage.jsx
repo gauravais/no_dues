@@ -47,6 +47,10 @@ import {
   Eye,
   EyeOff,
   AlertTriangle,
+  RotateCw,
+  Check,
+  History,
+  AlertCircle,
 } from 'lucide-react'
 
 export function RegistrarRequestDetailPage() {
@@ -64,8 +68,26 @@ export function RegistrarRequestDetailPage() {
 
   // Mark Processed Dialog & Form State
   const [processModalOpen, setProcessModalOpen] = useState(false)
+  const [confirmProcessOpen, setConfirmProcessOpen] = useState(false)
   const [paymentRef, setPaymentRef] = useState('')
+  const [paidOn, setPaidOn] = useState(new Date().toISOString().slice(0, 10))
+  const [paymentMode, setPaymentMode] = useState('NEFT')
   const [processError, setProcessError] = useState('')
+
+  // Reopen Verification Dialog State
+  const [reopenModalOpen, setReopenModalOpen] = useState(false)
+  const [reopenReason, setReopenReason] = useState('')
+
+  // Mark Failed Dialog State
+  const [markFailedModalOpen, setMarkFailedModalOpen] = useState(false)
+  const [failedReason, setFailedReason] = useState('')
+
+  // Retry Payment Dialog State
+  const [confirmRetryOpen, setConfirmRetryOpen] = useState(false)
+
+  // Resolve Student Issue Dialog State
+  const [resolveModalOpen, setResolveModalOpen] = useState(false)
+  const [resolveNote, setResolveNote] = useState('')
 
   // Reveal Bank Details State (never stored in query cache, never stored in localStorage)
   const [revealConfirmOpen, setRevealConfirmOpen] = useState(false)
@@ -127,7 +149,7 @@ export function RegistrarRequestDetailPage() {
     }
   }, [])
 
-  // Verify Refund Mutation
+  // 1. Verify Refund Mutation
   const verifyMutation = useMutation({
     mutationFn: ({ deposit_amount, deductions, remarks }) =>
       registrarApi.verifyRefund(Number(id), { deposit_amount, deductions, remarks }),
@@ -145,13 +167,29 @@ export function RegistrarRequestDetailPage() {
     },
   })
 
-  // Mark Processed Mutation
+  // 2. Reopen Verification Mutation
+  const reopenMutation = useMutation({
+    mutationFn: ({ reason }) => registrarApi.reopenVerification(Number(id), { reason }),
+    onSuccess: () => {
+      toast.success('Verification reopened. Refund returned to TO_VERIFY queue.')
+      setReopenModalOpen(false)
+      setReopenReason('')
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'request', id] })
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'queue'] })
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || 'Failed to reopen verification.')
+    },
+  })
+
+  // 3. Mark Processed Mutation
   const processMutation = useMutation({
-    mutationFn: ({ payment_reference }) =>
-      registrarApi.markProcessed(Number(id), { payment_reference }),
+    mutationFn: ({ payment_reference, paid_on, payment_mode }) =>
+      registrarApi.markProcessed(Number(id), { payment_reference, paid_on, payment_mode }),
     onSuccess: () => {
       toast.success('Disbursement recorded! Refund marked as processed.')
       setProcessModalOpen(false)
+      setConfirmProcessOpen(false)
       setPaymentRef('')
       setProcessError('')
       queryClient.invalidateQueries({ queryKey: ['registrar', 'request', id] })
@@ -161,6 +199,50 @@ export function RegistrarRequestDetailPage() {
       const msg = err.response?.data?.detail || 'Failed to record disbursement.'
       setProcessError(msg)
       toast.error(msg)
+    },
+  })
+
+  // 4. Mark Failed Mutation
+  const markFailedMutation = useMutation({
+    mutationFn: ({ reason }) => registrarApi.markFailed(Number(id), { reason }),
+    onSuccess: () => {
+      toast.success('Disbursement marked as failed.')
+      setMarkFailedModalOpen(false)
+      setFailedReason('')
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'request', id] })
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'queue'] })
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || 'Failed to mark payment as failed.')
+    },
+  })
+
+  // 5. Retry Payment Mutation
+  const retryMutation = useMutation({
+    mutationFn: () => registrarApi.retryPayment(Number(id)),
+    onSuccess: () => {
+      toast.success('Payment reset to VERIFIED. Ready for retry.')
+      setConfirmRetryOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'request', id] })
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'queue'] })
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || 'Failed to retry payment.')
+    },
+  })
+
+  // 6. Resolve Student Issue Mutation
+  const resolveIssueMutation = useMutation({
+    mutationFn: ({ note }) => registrarApi.resolveIssue(Number(id), { note }),
+    onSuccess: () => {
+      toast.success('Student issue marked as resolved.')
+      setResolveModalOpen(false)
+      setResolveNote('')
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'request', id] })
+      queryClient.invalidateQueries({ queryKey: ['registrar', 'queue'] })
+    },
+    onError: (err) => {
+      toast.error(err.response?.data?.detail || 'Failed to resolve issue.')
     },
   })
 
@@ -212,15 +294,6 @@ export function RegistrarRequestDetailPage() {
     })
   }
 
-  const handleProcessSubmit = (e) => {
-    e.preventDefault()
-    if (!paymentRef.trim()) {
-      setProcessError('Bank payment reference / UTR transaction code is required.')
-      return
-    }
-    processMutation.mutate({ payment_reference: paymentRef.trim() })
-  }
-
   if (isLoading) {
     return (
       <AppShell>
@@ -262,14 +335,52 @@ export function RegistrarRequestDetailPage() {
   }
 
   const approvals = detail.approvals || []
-  const isRefundVerified = detail.refund_status === 'VERIFIED'
+  const isClearanceDone = detail.status === 'CLEARED' || detail.status === 'REFUND_VERIFIED'
+  const isAccountsVerified =
+    detail.refund_status === 'VERIFIED' ||
+    detail.refund_status === 'PROCESSED' ||
+    detail.refund_status === 'PAYMENT_FAILED'
   const isProcessed = detail.refund_status === 'PROCESSED'
+  const isPaymentFailed = detail.refund_status === 'PAYMENT_FAILED'
+  const isStudentConfirmed = Boolean(detail.student_confirmed_at)
+
+  const stepperStages = [
+    {
+      num: 1,
+      title: 'Clearance Complete',
+      done: isClearanceDone,
+      active: !isClearanceDone,
+      date: detail.cleared_date,
+    },
+    {
+      num: 2,
+      title: 'Accounts Verification',
+      done: isAccountsVerified,
+      active: isClearanceDone && !isAccountsVerified,
+      date: detail.verified_at,
+    },
+    {
+      num: 3,
+      title: 'Payment Disbursed',
+      done: isProcessed,
+      failed: isPaymentFailed,
+      active: detail.refund_status === 'VERIFIED',
+      date: detail.paid_on || detail.paid_at,
+    },
+    {
+      num: 4,
+      title: 'Receipt Confirmed',
+      done: isStudentConfirmed,
+      active: isProcessed && !isStudentConfirmed,
+      date: detail.student_confirmed_at,
+    },
+  ]
 
   return (
     <AppShell>
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Navigation Breadcrumb */}
-        <div className="flex items-center justify-between">
+        {/* Navigation Breadcrumb & Lifecycle Actions */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <Link
             to="/registrar"
             className="inline-flex items-center gap-1.5 text-xs text-zinc-600 hover:text-black font-medium"
@@ -278,32 +389,175 @@ export function RegistrarRequestDetailPage() {
             Back to Accounts & Refunds Queue
           </Link>
 
-          <div className="flex items-center gap-2">
-            {!isProcessed && (
+          {/* Actions valid ONLY for current state */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* When PENDING_VERIFICATION */}
+            {detail.refund_status === 'PENDING_VERIFICATION' && (
               <Button
                 size="sm"
                 onClick={handleOpenVerifyModal}
                 className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-1.5 h-8 font-semibold shadow-xs"
               >
                 <FileCheck2 className="w-3.5 h-3.5" />
-                {isRefundVerified ? 'Re-audit / Update Deductions' : 'Verify Refund Calculation'}
+                Verify Refund Calculation
               </Button>
             )}
 
-            {isRefundVerified && (
+            {/* When VERIFIED */}
+            {detail.refund_status === 'VERIFIED' && (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setPaymentRef('')
+                    setPaidOn(new Date().toISOString().slice(0, 10))
+                    setPaymentMode('NEFT')
+                    setProcessError('')
+                    setProcessModalOpen(true)
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 h-8 font-semibold shadow-xs"
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  Mark as Paid
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setReopenReason('')
+                    setReopenModalOpen(true)
+                  }}
+                  className="text-xs gap-1.5 h-8 border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                  Reopen Verification
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFailedReason('')
+                    setMarkFailedModalOpen(true)
+                  }}
+                  className="text-xs gap-1.5 h-8 border-rose-200 text-rose-700 hover:bg-rose-50"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Mark as Failed
+                </Button>
+              </>
+            )}
+
+            {/* When PAYMENT_FAILED */}
+            {detail.refund_status === 'PAYMENT_FAILED' && (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() => setConfirmRetryOpen(true)}
+                  className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs gap-1.5 h-8 font-semibold shadow-xs"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                  Retry Payment
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFailedReason('')
+                    setMarkFailedModalOpen(true)
+                  }}
+                  className="text-xs gap-1.5 h-8 border-rose-200 text-rose-700 hover:bg-rose-50"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  Mark as Failed
+                </Button>
+              </>
+            )}
+
+            {/* When PROCESSED */}
+            {detail.refund_status === 'PROCESSED' && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setFailedReason('')
+                  setMarkFailedModalOpen(true)
+                }}
+                className="text-xs gap-1.5 h-8 border-rose-200 text-rose-700 hover:bg-rose-50"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Mark as Failed
+              </Button>
+            )}
+
+            {/* When student issue is open */}
+            {detail.student_issue_note && !detail.student_issue_resolved_at && (
               <Button
                 size="sm"
                 onClick={() => {
-                  setPaymentRef('')
-                  setProcessError('')
-                  setProcessModalOpen(true)
+                  setResolveNote('')
+                  setResolveModalOpen(true)
                 }}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 h-8 font-semibold shadow-xs"
+                className="bg-amber-800 hover:bg-amber-900 text-white text-xs gap-1.5 h-8 font-semibold shadow-xs"
               >
-                <CreditCard className="w-3.5 h-3.5" />
-                Mark Processed (Disburse)
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Resolve Student Issue
               </Button>
             )}
+          </div>
+        </div>
+
+        {/* Stepper at the top showing current lifecycle stage */}
+        <div className="p-4 rounded-xl border border-border bg-white shadow-2xs">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {stepperStages.map((st) => (
+              <div key={st.num} className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-50 border border-zinc-100">
+                <div
+                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold font-mono shrink-0 ${
+                    st.done
+                      ? 'bg-emerald-600 text-white'
+                      : st.failed
+                      ? 'bg-red-600 text-white'
+                      : st.active
+                      ? 'bg-zinc-950 text-white ring-2 ring-zinc-200'
+                      : 'bg-zinc-200 text-zinc-500'
+                  }`}
+                >
+                  {st.done ? (
+                    <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                  ) : st.failed ? (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  ) : (
+                    st.num
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <span
+                    className={`text-xs block font-semibold truncate ${
+                      st.done
+                        ? 'text-emerald-900'
+                        : st.failed
+                        ? 'text-red-900'
+                        : st.active
+                        ? 'text-zinc-950'
+                        : 'text-zinc-400'
+                    }`}
+                  >
+                    {st.title}
+                  </span>
+                  <span className="text-[10px] text-zinc-400 block truncate">
+                    {st.date
+                      ? new Date(st.date).toLocaleDateString()
+                      : st.done
+                      ? 'Done'
+                      : st.active
+                      ? 'In progress'
+                      : 'Pending'}
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -335,7 +589,9 @@ export function RegistrarRequestDetailPage() {
                   className={`text-[10px] uppercase font-mono ${
                     isProcessed
                       ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                      : isRefundVerified
+                      : detail.refund_status === 'PAYMENT_FAILED'
+                      ? 'bg-red-50 text-red-800 border-red-300'
+                      : isAccountsVerified
                       ? 'bg-blue-50 text-blue-800 border-blue-300'
                       : 'bg-zinc-50 text-zinc-700 border-zinc-300'
                   }`}
@@ -397,7 +653,7 @@ export function RegistrarRequestDetailPage() {
           </div>
         </div>
 
-        {/* Bank Details & Audited Reveal Section */}
+        {/* Bank Details & Audited Reveal Section (Positioned near payment form) */}
         <div className="p-6 rounded-xl border border-border bg-white shadow-card space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
@@ -407,6 +663,9 @@ export function RegistrarRequestDetailPage() {
               </h2>
               <p className="text-xs text-zinc-500 mt-0.5">
                 Bank account provided by student for direct NEFT/RTGS deposit credit.
+              </p>
+              <p className="text-[11px] text-amber-800 font-medium mt-1">
+                Hint: Reveal only when you are about to pay.
               </p>
             </div>
 
@@ -505,6 +764,206 @@ export function RegistrarRequestDetailPage() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* Refund Lifecycle & Audit Timeline */}
+        <div className="rounded-xl border border-border bg-white shadow-card overflow-hidden">
+          <div className="px-6 py-4 border-b border-border bg-zinc-50/60 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <History className="w-4 h-4 text-zinc-700" />
+              <h2 className="font-heading text-base font-bold text-zinc-950">
+                Refund Lifecycle & Audit Timeline
+              </h2>
+            </div>
+            <span className="text-[11px] text-zinc-400 font-mono">
+              Audited event log
+            </span>
+          </div>
+
+          <div className="p-6 space-y-4">
+            {/* Student reported issue banner if exists */}
+            {detail.student_issue_note && (
+              <div
+                className={`p-4 rounded-lg border text-xs space-y-1.5 ${
+                  detail.student_issue_resolved_at
+                    ? 'bg-zinc-50 border-zinc-200 text-zinc-700'
+                    : 'bg-amber-50 border-amber-300 text-amber-950'
+                }`}
+              >
+                <div className="flex items-center justify-between font-semibold">
+                  <div className="flex items-center gap-1.5">
+                    <AlertTriangle
+                      className={`w-3.5 h-3.5 ${
+                        detail.student_issue_resolved_at ? 'text-zinc-500' : 'text-amber-700'
+                      }`}
+                    />
+                    <span>Student Problem Report</span>
+                  </div>
+                  <span className="text-[10px] font-mono">
+                    {detail.student_issue_at ? new Date(detail.student_issue_at).toLocaleString() : ''}
+                  </span>
+                </div>
+                <p className="font-mono p-2 rounded bg-white/80 border border-amber-200">
+                  "{detail.student_issue_note}"
+                </p>
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-[11px]">
+                    {detail.student_issue_resolved_at ? (
+                      <span className="text-emerald-700 font-medium">
+                        Resolved on {new Date(detail.student_issue_resolved_at).toLocaleString()}
+                      </span>
+                    ) : (
+                      <span className="text-amber-800 font-medium">
+                        Open — requires Accounts resolution
+                      </span>
+                    )}
+                  </span>
+                  {!detail.student_issue_resolved_at && (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        setResolveNote('')
+                        setResolveModalOpen(true)
+                      }}
+                      className="h-7 px-2.5 text-xs bg-amber-900 hover:bg-amber-950 text-white"
+                    >
+                      Resolve Issue
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Timeline Events List */}
+            <div className="space-y-3">
+              {/* 1. Verification Event */}
+              {detail.verified_at && (
+                <div className="p-3.5 rounded-lg bg-zinc-50 border border-zinc-200 text-xs flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-zinc-900">Verified by Accounts</span>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] bg-blue-50 text-blue-800 border-blue-200 font-mono"
+                      >
+                        VERIFIED
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-zinc-600">
+                      Verified by:{' '}
+                      <span className="font-medium text-zinc-900">
+                        {detail.verified_by_name || 'Accounts Officer'}
+                      </span>
+                    </p>
+                    {detail.accounts_note && (
+                      <div className="text-xs text-zinc-700 bg-white p-2 rounded border border-zinc-200 mt-1">
+                        <span className="font-semibold text-[10px] text-zinc-500 uppercase block mb-0.5">
+                          Accounts Note
+                        </span>
+                        {detail.accounts_note}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[11px] font-mono text-zinc-400 shrink-0">
+                    {new Date(detail.verified_at).toLocaleString()}
+                  </span>
+                </div>
+              )}
+
+              {/* 2. Paid / Processed Event */}
+              {(detail.paid_at || detail.paid_on || detail.payment_reference) && (
+                <div className="p-3.5 rounded-lg bg-emerald-50/50 border border-emerald-200 text-xs flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-emerald-950">Payment Processed</span>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] bg-emerald-100 text-emerald-900 border-emerald-300 font-mono"
+                      >
+                        PROCESSED
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-zinc-700 pt-0.5">
+                      <span>
+                        Disbursed By: <strong>{detail.paid_by_name || 'Accounts Officer'}</strong>
+                      </span>
+                      <span>
+                        Paid On:{' '}
+                        <strong>
+                          {detail.paid_on ? new Date(detail.paid_on).toLocaleDateString() : 'N/A'}
+                        </strong>
+                      </span>
+                      <span>
+                        Payment Mode: <strong>{detail.payment_mode || 'NEFT'}</strong>
+                      </span>
+                      <span>
+                        Payment Reference:{' '}
+                        <strong className="font-mono">{detail.payment_reference || 'N/A'}</strong>
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-mono text-emerald-800 shrink-0">
+                    {detail.paid_at ? new Date(detail.paid_at).toLocaleString() : ''}
+                  </span>
+                </div>
+              )}
+
+              {/* 3. Payment Failed Event */}
+              {(detail.failed_at || detail.failure_reason) && (
+                <div className="p-3.5 rounded-lg bg-red-50/50 border border-red-200 text-xs flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-red-950">Payment Failed</span>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] bg-red-100 text-red-900 border-red-300 font-mono"
+                      >
+                        FAILED
+                      </Badge>
+                    </div>
+                    <div className="text-xs text-red-900 bg-white p-2 rounded border border-red-200 mt-1">
+                      <span className="font-semibold text-[10px] text-red-600 uppercase block mb-0.5">
+                        Failure Reason
+                      </span>
+                      {detail.failure_reason}
+                    </div>
+                  </div>
+                  <span className="text-[11px] font-mono text-red-800 shrink-0">
+                    {detail.failed_at ? new Date(detail.failed_at).toLocaleString() : ''}
+                  </span>
+                </div>
+              )}
+
+              {/* 4. Student Confirmed Event */}
+              {detail.student_confirmed_at && (
+                <div className="p-3.5 rounded-lg bg-emerald-50/50 border border-emerald-200 text-xs flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-emerald-950">Student Receipt Confirmed</span>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] bg-emerald-100 text-emerald-900 border-emerald-300 font-mono"
+                      >
+                        CONFIRMED
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-zinc-600">
+                      Student confirmed receipt of net refund payout in registered bank account.
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-mono text-emerald-800 shrink-0">
+                    {new Date(detail.student_confirmed_at).toLocaleString()}
+                  </span>
+                </div>
+              )}
+
+              {!detail.verified_at && !detail.paid_at && !detail.failed_at && !detail.student_confirmed_at && (
+                <p className="text-xs text-zinc-400 italic py-2">
+                  No refund events recorded yet. Awaiting initial Accounts verification.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Approvals Summary Matrix */}
@@ -746,16 +1205,27 @@ export function RegistrarRequestDetailPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Dialog: Mark Processed */}
+      {/* Dialog: Mark as Paid */}
       <Dialog open={processModalOpen} onOpenChange={setProcessModalOpen}>
         <DialogContent className="sm:max-w-md bg-white p-6">
-          <form onSubmit={handleProcessSubmit}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              const cleanRef = paymentRef.trim()
+              if (!/^[a-zA-Z0-9\-_]{6,40}$/.test(cleanRef)) {
+                setProcessError('Payment reference must be 6 to 40 characters (alphanumeric, hyphens, and underscores only).')
+                return
+              }
+              setProcessError('')
+              setConfirmProcessOpen(true)
+            }}
+          >
             <DialogHeader className="pb-3">
               <DialogTitle className="font-heading font-bold text-base">
-                Record Bank Disbursement
+                Record Bank Disbursement (Mark as Paid)
               </DialogTitle>
               <DialogDescription className="text-xs">
-                Mark security deposit refund as PROCESSED by recording the bank transaction reference.
+                Provide bank transaction reference, disbursement date, and payment mode.
               </DialogDescription>
             </DialogHeader>
 
@@ -785,15 +1255,47 @@ export function RegistrarRequestDetailPage() {
                 </Label>
                 <Input
                   id="payRef"
-                  placeholder="e.g. UTR123456789012 or CMS/NEFT/0029"
+                  placeholder="e.g. UTR123456789012 or CMS-NEFT-0029"
                   value={paymentRef}
                   onChange={(e) => setPaymentRef(e.target.value)}
                   className="font-mono text-xs uppercase"
                   required
                 />
                 <p className="text-[11px] text-zinc-500">
-                  Enter the banking reference number generated from your institutional disbursement portal.
+                  6-40 alphanumeric characters, hyphens, and underscores.
                 </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="paidOn" className="text-xs font-semibold text-zinc-800">
+                  Disbursement Date *
+                </Label>
+                <Input
+                  id="paidOn"
+                  type="date"
+                  value={paidOn}
+                  onChange={(e) => setPaidOn(e.target.value)}
+                  className="text-xs"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="payMode" className="text-xs font-semibold text-zinc-800">
+                  Payment Mode *
+                </Label>
+                <select
+                  id="payMode"
+                  value={paymentMode}
+                  onChange={(e) => setPaymentMode(e.target.value)}
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="NEFT">NEFT</option>
+                  <option value="IMPS">IMPS</option>
+                  <option value="UPI">UPI</option>
+                  <option value="CHEQUE">CHEQUE</option>
+                  <option value="OTHER">OTHER</option>
+                </select>
               </div>
             </div>
 
@@ -810,10 +1312,264 @@ export function RegistrarRequestDetailPage() {
               <Button
                 type="submit"
                 size="sm"
-                disabled={processMutation.isPending}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9 font-semibold"
               >
-                {processMutation.isPending ? 'Recording...' : 'Mark Disbursed (Processed)'}
+                Proceed to Confirmation
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* AlertDialog: Confirm Mark as Paid */}
+      <AlertDialog open={confirmProcessOpen} onOpenChange={setConfirmProcessOpen}>
+        <AlertDialogContent className="bg-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950">
+              Confirm Bank Disbursement
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-zinc-600 space-y-2">
+              <p>
+                Confirm recording payment disbursement of{' '}
+                <strong>₹{detail.final_amount || detail.deposit_amount}</strong> for{' '}
+                <strong>{detail.student_name}</strong>:
+              </p>
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-800 text-xs font-mono space-y-1">
+                <div>Reference: {paymentRef}</div>
+                <div>Date: {paidOn}</div>
+                <div>Mode: {paymentMode}</div>
+                <div>Beneficiary: {detail.account_holder_name}</div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel className="text-xs h-9">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                processMutation.mutate({
+                  payment_reference: paymentRef.trim(),
+                  paid_on: paidOn,
+                  payment_mode: paymentMode,
+                })
+              }}
+              disabled={processMutation.isPending}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9 font-semibold"
+            >
+              {processMutation.isPending ? 'Recording...' : 'Yes, Confirm & Record Payment'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Dialog: Reopen Verification */}
+      <Dialog open={reopenModalOpen} onOpenChange={setReopenModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white p-6">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!reopenReason.trim()) {
+                toast.error('Reason for reopening verification is mandatory.')
+                return
+              }
+              reopenMutation.mutate({ reason: reopenReason.trim() })
+            }}
+          >
+            <DialogHeader className="pb-3">
+              <DialogTitle className="font-heading font-bold text-base">
+                Reopen Refund Verification
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Reopen verification to re-calculate deductions or update security deposit details.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-1 text-xs">
+              <div className="space-y-1.5">
+                <Label htmlFor="reopenReason" className="text-xs font-semibold text-zinc-800">
+                  Reason for Reopening *
+                </Label>
+                <Textarea
+                  id="reopenReason"
+                  rows={3}
+                  placeholder="e.g. Revised deduction assessed by department, mistake in calculation..."
+                  value={reopenReason}
+                  onChange={(e) => setReopenReason(e.target.value)}
+                  className="text-xs resize-none"
+                  required
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-4 border-t border-zinc-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setReopenModalOpen(false)}
+                className="text-xs h-9"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={reopenMutation.isPending || !reopenReason.trim()}
+                className="bg-zinc-950 text-white hover:bg-zinc-800 text-xs h-9 font-semibold"
+              >
+                {reopenMutation.isPending ? 'Reopening...' : 'Confirm Reopen'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Mark Failed */}
+      <Dialog open={markFailedModalOpen} onOpenChange={setMarkFailedModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white p-6">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!failedReason.trim()) {
+                toast.error('Failure reason is mandatory.')
+                return
+              }
+              markFailedMutation.mutate({ reason: failedReason.trim() })
+            }}
+          >
+            <DialogHeader className="pb-3">
+              <DialogTitle className="font-heading font-bold text-base">
+                Mark Disbursement as Failed
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Record bank disbursement failure reason so the student and office can rectify bank information.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-1 text-xs">
+              <div className="space-y-1.5">
+                <Label htmlFor="failedReason" className="text-xs font-semibold text-zinc-800">
+                  Disbursement Failure Reason *
+                </Label>
+                <Textarea
+                  id="failedReason"
+                  rows={3}
+                  placeholder="e.g. Bank rejected transfer: Invalid account number / IFSC code mismatch / Beneficiary name mismatch..."
+                  value={failedReason}
+                  onChange={(e) => setFailedReason(e.target.value)}
+                  className="text-xs resize-none"
+                  required
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-4 border-t border-zinc-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setMarkFailedModalOpen(false)}
+                className="text-xs h-9"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={markFailedMutation.isPending || !failedReason.trim()}
+                className="bg-rose-700 hover:bg-rose-800 text-white text-xs h-9 font-semibold"
+              >
+                {markFailedMutation.isPending ? 'Recording...' : 'Confirm Failure'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* AlertDialog: Confirm Retry Payment */}
+      <AlertDialog open={confirmRetryOpen} onOpenChange={setConfirmRetryOpen}>
+        <AlertDialogContent className="bg-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950">
+              Retry Payment Disbursement?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs text-zinc-600 leading-relaxed">
+              This will transition the refund status from <strong>PAYMENT_FAILED</strong> back to{' '}
+              <strong>VERIFIED</strong>, allowing you to record a new payment transaction reference.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel className="text-xs h-9">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => retryMutation.mutate()}
+              disabled={retryMutation.isPending}
+              className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
+            >
+              {retryMutation.isPending ? 'Retrying...' : 'Confirm Retry'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Dialog: Resolve Student Issue */}
+      <Dialog open={resolveModalOpen} onOpenChange={setResolveModalOpen}>
+        <DialogContent className="sm:max-w-md bg-white p-6">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              resolveIssueMutation.mutate({ note: resolveNote.trim() || undefined })
+            }}
+          >
+            <DialogHeader className="pb-3">
+              <DialogTitle className="font-heading font-bold text-base">
+                Resolve Student Issue
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Mark the student-reported issue as resolved with optional resolution notes.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-1 text-xs">
+              {detail.student_issue_note && (
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-950">
+                  <span className="font-semibold block text-[11px] text-amber-800 mb-0.5">
+                    Student Issue Description:
+                  </span>
+                  <p className="font-mono text-xs">"{detail.student_issue_note}"</p>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <Label htmlFor="resolveNote" className="text-xs font-semibold text-zinc-800">
+                  Resolution Remarks (Optional)
+                </Label>
+                <Textarea
+                  id="resolveNote"
+                  rows={3}
+                  placeholder="e.g. Contacted bank, clarified deduction with student, or re-initiated transfer..."
+                  value={resolveNote}
+                  onChange={(e) => setResolveNote(e.target.value)}
+                  className="text-xs resize-none"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2 sm:gap-0 pt-4 border-t border-zinc-100">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setResolveModalOpen(false)}
+                className="text-xs h-9"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={resolveIssueMutation.isPending}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-9 font-semibold"
+              >
+                {resolveIssueMutation.isPending ? 'Resolving...' : 'Mark as Resolved'}
               </Button>
             </DialogFooter>
           </form>

@@ -61,7 +61,7 @@ class ClearanceRequest(Base):
             "uq_clearance_requests_active_roster",
             "roster_id",
             unique=True,
-            postgresql_where=text("status NOT IN ('REFUND_VERIFIED', 'CANCELLED')"),
+            postgresql_where=text("status <> 'CANCELLED'"),
         ),
     )
 

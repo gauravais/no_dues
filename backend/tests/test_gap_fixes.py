@@ -349,8 +349,8 @@ def test_student_current_request_refund_lifecycle(client, db_session):
     )
     assert res.status_code == 201
     created_data = res.json()
-    assert created_data["refund_status"] == "PENDING_VERIFICATION"
-    assert float(created_data["deposit_amount"]) == 5000.00
+    assert created_data["refund_status"] is None
+    assert created_data["deposit_amount"] is None
     assert created_data["payment_reference"] is None
 
     # Check GET /student/requests/current immediately
@@ -358,8 +358,8 @@ def test_student_current_request_refund_lifecycle(client, db_session):
         "/student/requests/current",
         headers=make_auth_headers(student.id),
     ).json()
-    assert cur1["refund_status"] == "PENDING_VERIFICATION"
-    assert float(cur1["deposit_amount"]) == 5000.00
+    assert cur1["refund_status"] is None
+    assert cur1["deposit_amount"] is None
     assert cur1["payment_reference"] is None
 
     req_id = cur1["id"]

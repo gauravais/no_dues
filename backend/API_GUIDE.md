@@ -215,13 +215,14 @@ When deployed with `APP_ENV=production`, the application refuses to start and ra
 | Method | Path | Allowed Roles | Summary / Purpose |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/student/bank-details` | `student` | Returns masked refund bank details (`********1234`). |
-| `PUT` | `/student/bank-details` | `student` | Updates refund bank details with authenticated Fernet encryption at rest. |
-| `POST` | `/student/requests` | `student` | Submits clearance application with declarations (`is_hosteller`, `lab_course_ids`, `others_note`, and optional `other_department_ids` / `other_office_ids`). Validates other offices are `ASSIGNED_ONLY`, unlinked to lab subjects, and staffed. |
-| `GET` | `/student/requests/current` | `student` | Returns clearance checklist and current progress, including refund breakdown (`refund_status`, `deposit_amount`, `deductions`, `final_amount`, and `payment_reference` populated strictly when status is `PROCESSED`). |
+| `PUT` | `/student/bank-details` | `student` | Updates refund bank details with authenticated Fernet encryption at rest. Allowed before refund is `PROCESSED`, returns 409 Conflict afterwards. Audits changes with masked account. |
+| `POST` | `/student/requests` | `student` | Submits clearance application with declarations (`is_hosteller`, `lab_course_ids`, `others_note`, and optional `other_department_ids` / `other_office_ids`). Only one non-cancelled request allowed per student. |
+| `GET` | `/student/requests/current` | `student` | Returns clearance checklist and current progress. All financial fields (`refund_status`, `deposit_amount`, `deductions`, `final_amount`) are `null` until refund is verified; returns `accounts_note`, `paid_on`, `payment_mode`, `payment_reference` (when `PROCESSED`), `failure_reason` (when `PAYMENT_FAILED`), `student_confirmed_at`, `student_issue_note`, `student_issue_at`. |
+| `POST` | `/student/requests/{id}/refund/confirm` | `student` | Confirms refund receipt (`{"received": true}` when `PROCESSED`) or reports an issue (`{"received": false, "note": "..."}` with mandatory note when `PROCESSED` or `PAYMENT_FAILED`). |
 | `POST` | `/student/requests/{id}/cancel` | `student` | Cancels clearance request (allowed strictly while all approvals remain `PENDING`). |
 | `POST` | `/student/requests/{id}/lab-courses` | `student` | Declares additional lab subjects mid-clearance (resets status back to `SUBMITTED` if currently in `HOD_REVIEW`). |
 | `POST` | `/student/requests/{id}/departments` | `student` | Adds dealing department to active clearance request. |
-| `GET` | `/student/lab-catalog` | `student` | Scoped lab catalog (own department + open electives). |
+| `GET` | `/student/lab-catalog` | `student` | Scoped lab catalog (own department + open electives) with `has_active_officer` flag. |
 | `POST` | `/student/requests/{id}/departments/{d_id}/resubmit` | `student` | Resubmits review line after resolving dues. |
 | `POST` | `/student/requests/{id}/resubmit-to-hod` | `student` | Resubmits request to HoD after addressing remarks. |
 | `GET` | `/student/requests/{id}/certificate.pdf` | `student` | Generates and downloads official clearance certificate PDF. |
@@ -256,11 +257,16 @@ When deployed with `APP_ENV=production`, the application refuses to start and ra
 ### Registrar / Accounts (`/registrar`)
 | Method | Path | Allowed Roles | Summary / Purpose |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/registrar/queue` | `registrar_accounts` | Queue of requests in `CLEARED` or `REFUND_VERIFIED`. |
-| `GET` | `/registrar/requests/{id}` | `registrar_accounts` | Request details with roster provenance and masked account. |
-| `POST` | `/registrar/requests/{id}/verify-refund` | `registrar_accounts` | Sets verified deposit amount, deductions, and remarks. |
-| `POST` | `/registrar/requests/{id}/mark-processed` | `registrar_accounts` | Records disbursement transaction payment reference in database. |
-| `POST` | `/registrar/requests/{id}/reveal-bank-details` | `registrar_accounts` | Audited reveal of full plain bank account number (max 10/min). |
+| `GET` | `/registrar/queue?tab=` | `registrar_accounts` | Queue of requests filtered by tab (`TO_VERIFY`, `TO_PAY`, `PAID`, `FAILED`, `ALL`). Returns tab `counts`, `total_to_pay_amount`, `total_paid_amount`, and items with `student_issue_open: bool`. |
+| `GET` | `/registrar/requests/{id}` | `registrar_accounts` | Request details with roster provenance, masked account, and full 14 timeline fields (`verified_at`, `verified_by_name`, `accounts_note`, `paid_at`, `paid_by_name`, `paid_on`, `payment_mode`, `payment_reference`, `failure_reason`, `failed_at`, `student_confirmed_at`, `student_issue_note`, `student_issue_at`, `student_issue_resolved_at`). |
+| `POST` | `/registrar/requests/{id}/verify-refund` | `registrar_accounts` | Sets verified deposit amount, deductions, and remarks (`accounts_note` max 500). Transitions `CLEARED` & `PENDING_VERIFICATION` to `REFUND_VERIFIED` & `VERIFIED`. Records `verified_at` and `verified_by_user_id`. |
+| `POST` | `/registrar/requests/{id}/reopen-verification` | `registrar_accounts` | Reopens a verified refund with mandatory reason (`VERIFIED` & `REFUND_VERIFIED` back to `PENDING_VERIFICATION` & `CLEARED`). |
+| `POST` | `/registrar/requests/{id}/mark-processed` | `registrar_accounts` | Records disbursement transaction payment reference, `paid_on` date (validated not in future and not before `verified_at`), and optional `payment_mode`. Transitions `VERIFIED` -> `PROCESSED`. Closes open student issue. |
+| `POST` | `/registrar/requests/{id}/mark-failed` | `registrar_accounts` | Marks verified or processed refund disbursement as failed (`PAYMENT_FAILED`) with mandatory reason. Retains previous payment reference in audit log. Closes open student issue. |
+| `POST` | `/registrar/requests/{id}/retry-payment` | `registrar_accounts` | Transitions failed refund (`PAYMENT_FAILED`) back to `VERIFIED` for re-disbursement. Closes open student issue. |
+| `POST` | `/registrar/requests/{id}/resolve-issue` | `registrar_accounts` | Resolves student-reported refund issue (`student_issue_resolved_at = now`) with optional resolution note. |
+| `GET` | `/registrar/refunds/export.csv?tab=` | `registrar_accounts` | Exports CSV table of refunds filtered by tab with masked account numbers (`********1234`). Audited and role-restricted. |
+| `POST` | `/registrar/requests/{id}/reveal-bank-details` | `registrar_accounts` | Audited reveal of full plain bank account number (max 10/min per user). |
 
 ### Public Verification (`/verify`)
 | Method | Path | Allowed Roles | Summary / Purpose |

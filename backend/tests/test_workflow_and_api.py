@@ -149,7 +149,7 @@ def test_2_second_open_request_refused(db_session: Session):
     assert req.status == ClearanceStatus.SUBMITTED
 
     # Second open request must raise WorkflowConflictError
-    with pytest.raises(WorkflowConflictError, match="already has an active clearance request"):
+    with pytest.raises(WorkflowConflictError, match="Only one non-cancelled clearance request is permitted per student"):
         create_request(db_session, user)
 
 

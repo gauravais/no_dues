@@ -30,16 +30,19 @@ import {
   Receipt,
   FileCheck2,
   AlertCircle,
+  Download,
+  AlertTriangle,
 } from 'lucide-react'
 
 export function RegistrarRefundPage() {
   useDocumentTitle('Refunds & Disbursements')
   const { user } = useAuth()
 
-  const [activeTab, setActiveTab] = useState('CLEARED')
+  const [activeTab, setActiveTab] = useState('TO_VERIFY')
   const [pageIndex, setPageIndex] = useState(0)
   const [pageSize] = useState(25)
   const [searchTerm, setSearchTerm] = useState('')
+  const [isExporting, setIsExporting] = useState(false)
 
   // Refund Modal Flow State
   const [modalOpen, setModalOpen] = useState(false)
@@ -70,7 +73,7 @@ export function RegistrarRefundPage() {
     queryKey: ['registrar', 'queue', activeTab, pageIndex, pageSize],
     queryFn: async () => {
       return await registrarApi.getQueue({
-        status: activeTab,
+        tab: activeTab,
         limit: pageSize,
         offset: pageIndex * pageSize,
       })
@@ -185,6 +188,27 @@ export function RegistrarRefundPage() {
     }
   }
 
+  // Export refunds CSV
+  const handleExportCsv = async () => {
+    setIsExporting(true)
+    try {
+      const blob = await registrarApi.exportCsv(activeTab)
+      const url = window.URL.createObjectURL(new Blob([blob], { type: 'text/csv;charset=utf-8;' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', `svsu_refunds_${activeTab.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.csv`)
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+      toast.success(`Exported ${activeTab} refunds list to CSV.`)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to export CSV.')
+    } finally {
+      setIsExporting(false)
+    }
+  }
+
   // Column definitions
   const columns = useMemo(() => {
     const baseCols = [
@@ -194,13 +218,24 @@ export function RegistrarRefundPage() {
         cell: ({ row }) => {
           const item = row.original
           return (
-            <div>
+            <div className="space-y-1">
               <span className="font-semibold text-zinc-900 block text-xs sm:text-sm">
                 {item.student_name}
               </span>
-              <span className="font-mono text-[11px] text-zinc-500">
-                {item.registration_number}
-              </span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-mono text-[11px] text-zinc-500">
+                  {item.registration_number}
+                </span>
+                {item.student_issue_open && (
+                  <Badge
+                    variant="outline"
+                    className="bg-amber-50 text-amber-900 border-amber-300 text-[10px] gap-1 font-medium"
+                  >
+                    <AlertTriangle className="w-2.5 h-2.5 text-amber-700" />
+                    Student reported a problem
+                  </Badge>
+                )}
+              </div>
             </div>
           )
         },
@@ -221,51 +256,40 @@ export function RegistrarRefundPage() {
           const amt = row.original.deposit_amount
           return (
             <span className="font-mono font-bold text-xs sm:text-sm text-zinc-900">
-              ₹{Number(amt).toLocaleString('en-IN')}
+              ₹{Number(amt || 0).toLocaleString('en-IN')}
             </span>
           )
         },
       },
-    ]
-
-    if (activeTab === 'REFUND_VERIFIED') {
-      baseCols.push(
-        {
-          accessorKey: 'deductions',
-          header: 'Deductions',
-          cell: ({ row }) => {
-            const ded = row.original.deductions
-            return (
-              <span className="font-mono text-xs text-rose-700 font-medium">
-                {ded != null ? `₹${Number(ded).toLocaleString('en-IN')}` : '₹0'}
-              </span>
-            )
-          },
-        },
-        {
-          accessorKey: 'final_amount',
-          header: 'Final Refund',
-          cell: ({ row }) => {
-            const fin =
-              row.original.final_amount != null
-                ? row.original.final_amount
-                : row.original.deposit_amount
-            return (
-              <span className="font-mono font-bold text-xs sm:text-sm text-emerald-800">
-                ₹{Number(fin).toLocaleString('en-IN')}
-              </span>
-            )
-          },
-        }
-      )
-    }
-
-    baseCols.push(
       {
-        accessorKey: 'cleared_at',
+        accessorKey: 'deductions',
+        header: 'Deductions',
+        cell: ({ row }) => {
+          const ded = row.original.deductions
+          return (
+            <span className="font-mono text-xs text-rose-700 font-medium">
+              {ded != null ? `₹${Number(ded).toLocaleString('en-IN')}` : '—'}
+            </span>
+          )
+        },
+      },
+      {
+        accessorKey: 'final_amount',
+        header: 'Final Refund',
+        cell: ({ row }) => {
+          const fin = row.original.final_amount
+          return (
+            <span className="font-mono font-bold text-xs sm:text-sm text-emerald-800">
+              {fin != null ? `₹${Number(fin).toLocaleString('en-IN')}` : '—'}
+            </span>
+          )
+        },
+      },
+      {
+        accessorKey: 'cleared_date',
         header: 'Cleared On',
         cell: ({ row }) => {
-          const d = row.original.cleared_at
+          const d = row.original.cleared_date
           return d ? (
             <span className="text-xs text-zinc-600">
               {new Date(d).toLocaleDateString()}
@@ -288,6 +312,8 @@ export function RegistrarRefundPage() {
                   ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
                   : st === 'VERIFIED'
                   ? 'bg-indigo-50 text-indigo-900 border-indigo-200'
+                  : st === 'PAYMENT_FAILED'
+                  ? 'bg-red-50 text-red-900 border-red-200'
                   : 'bg-amber-50 text-amber-900 border-amber-200'
               }`}
             >
@@ -303,7 +329,17 @@ export function RegistrarRefundPage() {
           const item = row.original
           return (
             <div className="flex items-center gap-1.5">
-              {activeTab === 'REFUND_VERIFIED' ? (
+              {item.refund_status === 'PENDING_VERIFICATION' && (
+                <Button
+                  size="sm"
+                  onClick={() => openRefundModal(item, 1)}
+                  className="h-8 px-2.5 text-xs gap-1 bg-zinc-950 text-white hover:bg-zinc-800"
+                >
+                  <CreditCard className="w-3.5 h-3.5" />
+                  Verify
+                </Button>
+              )}
+              {item.refund_status === 'VERIFIED' && (
                 <Button
                   size="sm"
                   onClick={() => openRefundModal(item, 2)}
@@ -311,15 +347,6 @@ export function RegistrarRefundPage() {
                 >
                   <FileCheck2 className="w-3.5 h-3.5" />
                   Record UTR
-                </Button>
-              ) : (
-                <Button
-                  size="sm"
-                  onClick={() => openRefundModal(item, 1)}
-                  className="h-8 px-2.5 text-xs gap-1 bg-zinc-950 text-white hover:bg-zinc-800"
-                >
-                  <CreditCard className="w-3.5 h-3.5" />
-                  Reconcile
                 </Button>
               )}
               <Link to={`/registrar/requests/${item.request_id}`}>
@@ -334,11 +361,11 @@ export function RegistrarRefundPage() {
             </div>
           )
         },
-      }
-    )
+      },
+    ]
 
     return baseCols
-  }, [activeTab])
+  }, [])
 
   const renderMobileCard = (item) => (
     <div className="p-4 rounded-xl border border-border bg-white shadow-2xs space-y-3">
@@ -351,9 +378,20 @@ export function RegistrarRefundPage() {
             {item.registration_number}
           </span>
         </div>
-        <Badge variant="outline" className="text-[10px] font-mono bg-zinc-50">
-          {item.refund_status}
-        </Badge>
+        <div className="flex flex-col items-end gap-1">
+          <Badge variant="outline" className="text-[10px] font-mono bg-zinc-50">
+            {item.refund_status}
+          </Badge>
+          {item.student_issue_open && (
+            <Badge
+              variant="outline"
+              className="bg-amber-50 text-amber-900 border-amber-300 text-[10px] gap-1 font-medium"
+            >
+              <AlertTriangle className="w-2.5 h-2.5 text-amber-700" />
+              Student reported a problem
+            </Badge>
+          )}
+        </div>
       </div>
 
       <div className="text-xs text-zinc-600">
@@ -364,46 +402,58 @@ export function RegistrarRefundPage() {
         <div className="flex items-center justify-between">
           <span>Security Deposit:</span>
           <span className="font-mono font-bold text-zinc-900">
-            ₹{Number(item.deposit_amount).toLocaleString('en-IN')}
+            ₹{Number(item.deposit_amount || 0).toLocaleString('en-IN')}
           </span>
         </div>
-        {activeTab === 'REFUND_VERIFIED' && (
-          <>
-            <div className="flex items-center justify-between text-rose-700">
-              <span>Deductions:</span>
-              <span className="font-mono font-medium">
-                ₹{Number(item.deductions || 0).toLocaleString('en-IN')}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-emerald-800 font-bold">
-              <span>Net Refund:</span>
-              <span className="font-mono">
-                ₹{Number(item.final_amount != null ? item.final_amount : item.deposit_amount).toLocaleString('en-IN')}
-              </span>
-            </div>
-          </>
+        {item.deductions != null && (
+          <div className="flex items-center justify-between text-rose-700">
+            <span>Deductions:</span>
+            <span className="font-mono font-medium">
+              ₹{Number(item.deductions || 0).toLocaleString('en-IN')}
+            </span>
+          </div>
+        )}
+        {item.final_amount != null && (
+          <div className="flex items-center justify-between text-emerald-800 font-bold">
+            <span>Net Refund:</span>
+            <span className="font-mono">
+              ₹{Number(item.final_amount).toLocaleString('en-IN')}
+            </span>
+          </div>
         )}
       </div>
 
-      {activeTab === 'REFUND_VERIFIED' ? (
-        <Button
-          size="sm"
-          onClick={() => openRefundModal(item, 2)}
-          className="w-full mt-2 h-8 text-xs gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
-        >
-          <FileCheck2 className="w-3.5 h-3.5" />
-          Record UTR Reference
-        </Button>
-      ) : (
-        <Button
-          size="sm"
-          onClick={() => openRefundModal(item, 1)}
-          className="w-full mt-2 h-8 text-xs gap-1.5 bg-zinc-950 text-white hover:bg-zinc-800"
-        >
-          <CreditCard className="w-3.5 h-3.5" />
-          Process Refund
-        </Button>
-      )}
+      <div className="flex items-center gap-2 pt-2">
+        {item.refund_status === 'PENDING_VERIFICATION' && (
+          <Button
+            size="sm"
+            onClick={() => openRefundModal(item, 1)}
+            className="flex-1 h-8 text-xs gap-1.5 bg-zinc-950 text-white hover:bg-zinc-800"
+          >
+            <CreditCard className="w-3.5 h-3.5" />
+            Verify
+          </Button>
+        )}
+        {item.refund_status === 'VERIFIED' && (
+          <Button
+            size="sm"
+            onClick={() => openRefundModal(item, 2)}
+            className="flex-1 h-8 text-xs gap-1.5 bg-emerald-700 text-white hover:bg-emerald-800"
+          >
+            <FileCheck2 className="w-3.5 h-3.5" />
+            Record UTR
+          </Button>
+        )}
+        <Link to={`/registrar/requests/${item.request_id}`} className="flex-1">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-8 text-xs border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+          >
+            Inspect
+          </Button>
+        </Link>
+      </div>
     </div>
   )
 
@@ -433,7 +483,18 @@ export function RegistrarRefundPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isExporting}
+              onClick={handleExportCsv}
+              className="text-xs gap-1.5 h-8 border-border bg-white hover:bg-zinc-100"
+              title="Export currently selected tab to CSV (bank account numbers masked)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              {isExporting ? 'Exporting...' : 'Export list (CSV)'}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -469,14 +530,56 @@ export function RegistrarRefundPage() {
         )}
 
         {/* Workflow Advisory Banner */}
-        <div className="rounded-xl border border-border bg-zinc-50/70 p-4 text-xs text-zinc-600 space-y-1.5">
-          <div className="flex items-center gap-2 font-semibold text-zinc-900">
-            <Receipt className="w-4 h-4 text-zinc-700" />
-            <span>Post-Clearance Refund Procedure</span>
+        <div className="rounded-xl border border-border bg-zinc-50/70 p-4 text-xs text-zinc-600 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 font-semibold text-zinc-900">
+              <Receipt className="w-4 h-4 text-zinc-700" />
+              <span>Post-Clearance Refund Procedure</span>
+            </div>
+            <p className="leading-relaxed text-[11px] text-zinc-500">
+              Audit applicable dues/deductions against student security deposits, confirm the final payable refund amount, and record official bank payment transaction identifiers.
+            </p>
           </div>
-          <p className="leading-relaxed text-[11px] text-zinc-500">
-            Audit applicable dues/deductions against student security deposits, confirm the final payable refund amount, and record official bank UTR/NEFT payment transaction identifiers.
-          </p>
+          <span className="text-[11px] text-zinc-400 font-mono shrink-0">
+            Account numbers in CSV export are masked for security
+          </span>
+        </div>
+
+        {/* Summary Strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="rounded-xl border border-border bg-white p-4 shadow-2xs space-y-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block">
+              Awaiting Bank Payment (To Pay)
+            </span>
+            <div className="flex items-baseline justify-between pt-0.5">
+              <div className="text-xl font-bold font-mono text-zinc-900">
+                ₹{Number(queueResponse?.total_to_pay_amount || 0).toLocaleString('en-IN')}
+              </div>
+              <Badge variant="outline" className="text-xs font-mono bg-blue-50 text-blue-800 border-blue-200">
+                {queueResponse?.counts?.TO_PAY ?? 0} {queueResponse?.counts?.TO_PAY === 1 ? 'request' : 'requests'}
+              </Badge>
+            </div>
+            <span className="text-[11px] text-zinc-500 block">
+              Verified by Accounts Branch, queued for disbursement
+            </span>
+          </div>
+
+          <div className="rounded-xl border border-border bg-white p-4 shadow-2xs space-y-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block">
+              Disbursed Refunds (Paid)
+            </span>
+            <div className="flex items-baseline justify-between pt-0.5">
+              <div className="text-xl font-bold font-mono text-emerald-700">
+                ₹{Number(queueResponse?.total_paid_amount || 0).toLocaleString('en-IN')}
+              </div>
+              <Badge variant="outline" className="text-xs font-mono bg-emerald-50 text-emerald-800 border-emerald-200">
+                {queueResponse?.counts?.PAID ?? 0} completed
+              </Badge>
+            </div>
+            <span className="text-[11px] text-zinc-500 block">
+              Payment reference recorded and credit processed
+            </span>
+          </div>
         </div>
 
         {/* Lifecycle Status Tabs */}
@@ -488,18 +591,36 @@ export function RegistrarRefundPage() {
           }}
           className="w-full"
         >
-          <TabsList className="bg-zinc-100 p-1 border border-border">
+          <TabsList className="bg-zinc-100 p-1 border border-border flex flex-wrap h-auto gap-1">
             <TabsTrigger
-              value="CLEARED"
+              value="TO_VERIFY"
               className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
             >
-              Awaiting Verification (CLEARED)
+              To verify ({queueResponse?.counts?.TO_VERIFY ?? 0})
             </TabsTrigger>
             <TabsTrigger
-              value="REFUND_VERIFIED"
+              value="TO_PAY"
               className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
             >
-              Verified Refunds (Awaiting Payment Reference)
+              To pay ({queueResponse?.counts?.TO_PAY ?? 0})
+            </TabsTrigger>
+            <TabsTrigger
+              value="PAID"
+              className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
+            >
+              Paid ({queueResponse?.counts?.PAID ?? 0})
+            </TabsTrigger>
+            <TabsTrigger
+              value="FAILED"
+              className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
+            >
+              Failed ({queueResponse?.counts?.FAILED ?? 0})
+            </TabsTrigger>
+            <TabsTrigger
+              value="ALL"
+              className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:text-zinc-950"
+            >
+              All ({queueResponse?.counts?.ALL ?? 0})
             </TabsTrigger>
           </TabsList>
         </Tabs>

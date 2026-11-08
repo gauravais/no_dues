@@ -490,6 +490,7 @@ def notify_refund_verified(
     session: Session,
     request: ClearanceRequest,
     amount: Decimal | str,
+    accounts_note: str | None = None,
 ) -> None:
     """Queues refund verification notice to student."""
     student_email = request.roster_entry.email if request.roster_entry else None
@@ -497,12 +498,13 @@ def notify_refund_verified(
         return
 
     url = f"{settings.FRONTEND_BASE_URL}/student"
+    note_part = f"\nAccounts Note: {accounts_note}\n" if accounts_note else "\n"
     queue_email(
         session=session,
         to_email=student_email,
         subject="SVSU No-Dues Clearance: Caution Money Refund Verified",
         body=(
-            f"Your caution money refund of Rs. {amount} has been verified by Registrar Accounts.\n\n"
+            f"Your caution money refund of Rs. {amount} has been verified by Registrar Accounts.{note_part}\n"
             f"View your clearance status and certificate:\n{url}\n\n"
             f"Regards,\nSVSU No-Dues Clearance Team"
         ),
@@ -515,8 +517,35 @@ def notify_refund_processed(
     session: Session,
     request: ClearanceRequest,
     payment_reference: str,
+    paid_on: str | None = None,
 ) -> None:
     """Queues refund payment processed notice to student."""
+    student_email = request.roster_entry.email if request.roster_entry else None
+    if not student_email:
+        return
+
+    url = f"{settings.FRONTEND_BASE_URL}/student"
+    date_part = f" on {paid_on}" if paid_on else ""
+    queue_email(
+        session=session,
+        to_email=student_email,
+        subject="SVSU No-Dues Clearance: Refund Payment Processed",
+        body=(
+            f"Your caution money refund has been processed{date_part} with payment transaction reference: {payment_reference}.\n\n"
+            f"View your clearance record:\n{url}\n\n"
+            f"Regards,\nSVSU No-Dues Clearance Team"
+        ),
+        kind="refund_processed",
+        related_request_id=request.id,
+    )
+
+
+def notify_refund_failed(
+    session: Session,
+    request: ClearanceRequest,
+    failure_reason: str,
+) -> None:
+    """Queues refund payment failed notice to student with reason and dashboard link."""
     student_email = request.roster_entry.email if request.roster_entry else None
     if not student_email:
         return
@@ -525,15 +554,51 @@ def notify_refund_processed(
     queue_email(
         session=session,
         to_email=student_email,
-        subject="SVSU No-Dues Clearance: Refund Payment Processed",
+        subject="SVSU No-Dues Clearance: Refund Payment Failed",
         body=(
-            f"Your caution money refund has been processed with payment transaction reference: {payment_reference}.\n\n"
-            f"View your clearance record:\n{url}\n\n"
+            f"Your caution money refund transaction could not be completed.\n\n"
+            f"Reason: {failure_reason}\n\n"
+            f"Please review your details on the clearance dashboard:\n{url}\n\n"
             f"Regards,\nSVSU No-Dues Clearance Team"
         ),
-        kind="refund_processed",
+        kind="refund_failed",
         related_request_id=request.id,
     )
+
+
+def notify_student_refund_issue(
+    session: Session,
+    request: ClearanceRequest,
+    issue_note: str,
+) -> None:
+    """Queues notification to active registrar users when a student reports a refund issue (no bank data)."""
+    registrars = session.execute(
+        select(User).where(
+            User.role == UserRole.registrar_accounts,
+            User.is_active == True,
+        )
+    ).scalars().all()
+
+    student_name = request.roster_entry.name if request.roster_entry else "Student"
+    masked_reg = mask_reg_number(request.roster_entry.registration_number) if request.roster_entry else "N/A"
+    url = f"{settings.FRONTEND_BASE_URL}/registrar/requests/{request.id}"
+
+    for reg_user in registrars:
+        if not reg_user.email:
+            continue
+        queue_email(
+            session=session,
+            to_email=reg_user.email,
+            subject=f"SVSU No-Dues: Refund Issue Reported by {student_name} ({masked_reg})",
+            body=(
+                f"Student {student_name} (Registration No: {masked_reg}) reported an issue with their refund.\n\n"
+                f"Issue Note: {issue_note}\n\n"
+                f"Inspect clearance dossier and resolve issue:\n{url}\n\n"
+                f"Regards,\nSVSU No-Dues Clearance System"
+            ),
+            kind="student_refund_issue",
+            related_request_id=request.id,
+        )
 
 
 def notify_department_added(

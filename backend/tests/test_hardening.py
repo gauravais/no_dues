@@ -225,7 +225,7 @@ def test_create_request_concurrency_race(test_engine, TestingSessionLocal):
 
     assert outcomes.count("SUCCESS") == 1, f"Expected 1 SUCCESS, got {outcomes}"
     assert outcomes.count("CONFLICT_409") == 1, f"Expected 1 CONFLICT_409, got {outcomes}"
-    assert "Student already has an active clearance request." in next(r[1] for r in results if r[0] == "CONFLICT_409")
+    assert "Only one non-cancelled clearance request is permitted per student." in next(r[1] for r in results if r[0] == "CONFLICT_409")
 
     # Verify database integrity: exactly one request and one set of approvals
     verify_sess = TestingSessionLocal()

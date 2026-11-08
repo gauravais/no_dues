@@ -469,6 +469,53 @@ The frontend fully supports the additive multi-department membership model where
 - **Bulk CSV Ingestion**: Downloadable template and parser support the `departments` column with pipe separation (e.g., `Library|Sports`).
 - **Staffing Dashboard (`/admin/offices`)**: Shows subtle badges next to staff names indicating other university offices they represent.
 
+---
+
+## 11. Security Deposit Refund Loop & Post-Clearance Reconciliation
+
+The frontend completes the full post-clearance security deposit refund lifecycle across both Student and Accounts (Registrar) perspectives:
+
+### A. Student Refund Dashboard Experience (`StudentDashboard.jsx`)
+- **Four-Step Progress Line**: Visually represents the post-clearance refund pipeline:
+  1. *Clearance complete*: Marked complete when student request status reaches `CLEARED` or `REFUND_VERIFIED`.
+  2. *Accounts verification*: Marked complete when Accounts verifies deposit calculations (`VERIFIED`, `PROCESSED`, or `PAYMENT_FAILED`).
+  3. *Bank transfer*: Marked complete when disbursement is `PROCESSED`, or flagged in error if `PAYMENT_FAILED`.
+  4. *Completed*: Marked complete when student confirms receipt of funds.
+- **Amounts Display**:
+  - Before Accounts audits records, amounts explicitly state *"To be confirmed by Accounts"* (never defaulting to ₹0.00). An explanatory notice informs students: *"Accounts will confirm your deposit amount and any deductions. You will see them here."*
+  - Following verification, the dashboard renders original deposit, deductions applied, net refund amount, and any Accounts audit remarks in a dedicated box.
+- **Disbursement Details & Confirmation**:
+  - When `PROCESSED`, displays paid date, payment mode (NEFT/IMPS/UPI/CHEQUE/OTHER), and bank transaction reference with a one-click copy button.
+  - Action buttons:
+    - *"I received the refund"*: Opens confirmation dialog and sends `{ received: true }` to `POST /student/requests/{id}/refund/confirm`.
+    - *"I did not receive it / there is a problem"*: Opens dialog with a mandatory problem description textarea and sends `{ received: false, note: "..." }`.
+  - Once confirmed, displays green confirmation badge and hides action buttons.
+- **Payment Failure Handling**:
+  - When `PAYMENT_FAILED`, renders clear failure alert with the institutional reason and a button that smoothly scrolls to `#student-bank-card` (*"Check your bank details"*).
+- **Bank Detail Protection**:
+  - Editing bank details is locked once refund status reaches `PROCESSED`, surfacing the notice: *"Bank details cannot be modified after refund has been processed."*
+- **One-Time Refund Guarantee**:
+  - The Apply button stays hidden whenever the student has a non-cancelled request, with the explanation: *"Your deposit can be refunded once."*
+
+### B. Accounts (Registrar) Refund Queue (`RegistrarRefundPage.jsx`)
+- **Lifecycle Tabs & Counts**: Features tabs for `To verify` (`TO_VERIFY`), `To pay` (`TO_PAY`), `Paid` (`PAID`), `Failed` (`FAILED`), and `All` (`ALL`), each displaying live counts.
+- **Financial Summary Strip**: Highlights pending disbursement totals (`total_to_pay_amount` across `TO_PAY` items) and completed payouts (`total_paid_amount` across `PAID` items).
+- **Discrepancy Indicator**: Displays a *"Student reported a problem"* alert badge whenever `item.student_issue_open` is true.
+- **Masked CSV Export**: *"Export list (CSV)"* downloads a filtered CSV report of the currently selected tab, with a security note that account numbers in exports remain masked.
+
+### C. Accounts Request Audit & Disbursement Detail (`RegistrarRequestDetailPage.jsx`)
+- **Lifecycle Stepper**: Displays the 4-stage lifecycle at the top of the detail page.
+- **Strict State-Governed Actions**:
+  - *When PENDING_VERIFICATION*: "Verify Refund Calculation" (deposit amount, deductions, remarks/accounts note, live net preview).
+  - *When VERIFIED*: "Mark as Paid" (validated 6–40 alphanumeric/hyphen/underscore reference, paid date, payment mode), "Reopen Verification" (mandatory reason), and "Mark as Failed" (mandatory reason).
+  - *When PAYMENT_FAILED*: "Retry Payment" (resets to `VERIFIED`) and "Mark as Failed".
+  - *When PROCESSED*: "Mark as Failed" (for payment bounces or reversals).
+  - *When student issue is open*: "Resolve Student Issue" (optional resolution note).
+- **Audited Bank Detail Reveal**:
+  - Positioned adjacent to the payment form with the explicit guideline: *"Hint: Reveal only when you are about to pay."* Auto-vanishes after 30 seconds with no client-side caching.
+- **Comprehensive Audit Timeline**:
+  - Displays complete historical record: verification timestamp and officer name, accounts note, payment date and mode, transaction reference, failure reasons, student confirmation, and reported issues with resolution timestamps.
+
 
 
 
