@@ -74,8 +74,26 @@ export function OfficerRosterPage() {
     email: '',
     mobile: '',
     address: '',
+    programme_id: '',
   })
   const [editError, setEditError] = useState('')
+
+  // Fetch all programmes
+  const { data: allProgrammes = [] } = useQuery({
+    queryKey: ['programmes'],
+    queryFn: () => departmentApi.getProgrammes(),
+  })
+
+  // Filter programmes to officer's academic departments
+  const academicDeptIds = useMemo(
+    () => new Set(academicMemberships.map((m) => m.id)),
+    [academicMemberships]
+  )
+
+  const allowedProgrammes = useMemo(() => {
+    if (academicDeptIds.size === 0) return allProgrammes
+    return allProgrammes.filter((p) => academicDeptIds.has(p.academic_department_id))
+  }, [allProgrammes, academicDeptIds])
 
   // Fetch roster
   const {
@@ -144,16 +162,9 @@ export function OfficerRosterPage() {
       queryClient.invalidateQueries({ queryKey: ['department', 'roster'] })
     },
     onError: (err) => {
-      const status = err.response?.status
-      const msg = err.response?.data?.detail
-      if (status === 409) {
-        setEditError(
-          'Email Change Refused: This student already has an active university user account. Email modifications for provisioned accounts are strictly prohibited.'
-        )
-      } else {
-        setEditError(msg || 'Failed to update student record.')
-      }
-      toast.error(msg || 'Update failed.')
+      const msg = err.response?.data?.detail || 'Failed to update student record.'
+      setEditError(msg)
+      toast.error(msg)
     },
   })
 
@@ -162,7 +173,7 @@ export function OfficerRosterPage() {
     // Default programme_id to first known programme if available
     setAddForm((prev) => ({
       ...prev,
-      programme_id: knownProgrammes[0]?.id ? String(knownProgrammes[0].id) : '',
+      programme_id: allowedProgrammes[0]?.id ? String(allowedProgrammes[0].id) : knownProgrammes[0]?.id ? String(knownProgrammes[0].id) : '',
     }))
     setAddModalOpen(true)
   }
@@ -174,6 +185,7 @@ export function OfficerRosterPage() {
       email: student.email || '',
       mobile: student.mobile || '',
       address: student.address || '',
+      programme_id: student.programme_id ? String(student.programme_id) : '',
     })
     setEditError('')
     setEditModalOpen(true)
@@ -193,7 +205,13 @@ export function OfficerRosterPage() {
     if (!selectedStudent) return
     patchMutation.mutate({
       id: selectedStudent.id,
-      data: editForm,
+      data: {
+        name: editForm.name.trim(),
+        email: editForm.email.trim(),
+        mobile: editForm.mobile.trim(),
+        address: editForm.address.trim(),
+        programme_id: editForm.programme_id ? Number(editForm.programme_id) : undefined,
+      },
     })
   }
 
@@ -700,6 +718,28 @@ export function OfficerRosterPage() {
                   className="font-mono text-xs"
                   required
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="editProgramme" className="text-xs font-semibold text-zinc-800">
+                  Degree Programme
+                </Label>
+                <select
+                  id="editProgramme"
+                  value={editForm.programme_id}
+                  onChange={(e) => setEditForm({ ...editForm, programme_id: e.target.value })}
+                  className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  <option value="">Select Enrolled Programme...</option>
+                  {allowedProgrammes.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-zinc-500">
+                  Only programmes within your academic department are permitted. Programme changes are refused if the student has an active clearance request.
+                </p>
               </div>
 
               <div className="space-y-1.5">

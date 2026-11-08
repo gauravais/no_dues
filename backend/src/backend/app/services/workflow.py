@@ -151,28 +151,36 @@ def get_applicable_departments(
     roster: StudentRoster,
     declared_is_hosteller: bool = False,
     declared_lab_courses: Sequence[LabCourse] | None = None,
+    lab_workshop_departments: Sequence[Department] | None = None,
     other_departments: Sequence[Department] | None = None,
 ) -> list[Department]:
     """
     Computes all applicable departments for a student from declarations:
-    - ALWAYS: all departments with applicability ALWAYS
-    - HOSTELLER_ONLY: if student's DECLARATION declared_is_hosteller == True
-    - Assigned lab departments from declared_lab_courses (LabCourse.lab_department_id)
-    - Optional other ASSIGNED_ONLY offices declared by student
-    - Optional admin override: only departments mapped in roster_assigned_departments for this student
+    - ALWAYS: all active departments with applicability ALWAYS
+    - HOSTELLER_ONLY: if student's DECLARATION declared_is_hosteller == True (active only)
+    - Assigned lab departments from declared_lab_courses (active only)
+    - Directly declared lab_workshop_departments (active only)
+    - Optional other ASSIGNED_ONLY offices declared by student (active only)
+    - Optional admin override: only departments mapped in roster_assigned_departments for this student (active only)
     - OWN_ACADEMIC: student's own academic department (via programme -> academic_department_id)
     """
-    # 1. ALWAYS departments
+    # 1. ALWAYS departments (active only)
     always_depts = session.execute(
-        select(Department).where(Department.applicability == DepartmentApplicability.ALWAYS)
+        select(Department).where(
+            Department.applicability == DepartmentApplicability.ALWAYS,
+            Department.is_active == True,
+        )
     ).scalars().all()
 
-    # 2. HOSTELLER_ONLY departments (computed from declaration with roster fallback)
+    # 2. HOSTELLER_ONLY departments (computed from declaration with roster fallback, active only)
     hostel_depts: Sequence[Department] = []
     effective_is_hosteller = declared_is_hosteller if declared_is_hosteller is not None else roster.is_hosteller
     if effective_is_hosteller:
         hostel_depts = session.execute(
-            select(Department).where(Department.applicability == DepartmentApplicability.HOSTELLER_ONLY)
+            select(Department).where(
+                Department.applicability == DepartmentApplicability.HOSTELLER_ONLY,
+                Department.is_active == True,
+            )
         ).scalars().all()
 
     # 3. Lab departments from declared subjects
@@ -191,7 +199,10 @@ def get_applicable_departments(
     assigned_depts: Sequence[Department] = []
     if lab_dept_ids:
         assigned_depts = session.execute(
-            select(Department).where(Department.id.in_(lab_dept_ids))
+            select(Department).where(
+                Department.id.in_(lab_dept_ids),
+                Department.is_active == True,
+            )
         ).scalars().all()
 
     # 4. Student's OWN_ACADEMIC department
@@ -203,10 +214,18 @@ def get_applicable_departments(
     if not academic_dept:
         raise WorkflowNotFoundError(f"Academic department {prog.academic_department_id} not found.")
 
-    # Combine unique departments by ID
+    # Combine unique active departments by ID
     dept_map: dict[int, Department] = {}
-    for d in list(always_depts) + list(hostel_depts) + list(assigned_depts) + list(other_departments or []) + [academic_dept]:
-        dept_map[d.id] = d
+    for d in (
+        list(always_depts)
+        + list(hostel_depts)
+        + list(assigned_depts)
+        + list(lab_workshop_departments or [])
+        + list(other_departments or [])
+        + ([academic_dept] if academic_dept.is_active else [])
+    ):
+        if d.is_active:
+            dept_map[d.id] = d
 
     return sorted(list(dept_map.values()), key=lambda x: x.id)
 
@@ -266,6 +285,7 @@ def create_request(
     student_user: User,
     declared_is_hosteller: bool | None = None,
     declared_lab_course_ids: list[int] | None = None,
+    lab_workshop_department_ids: list[int] | None = None,
     other_department_ids: list[int] | None = None,
     others_note: str | None = None,
 ) -> ClearanceRequest:
@@ -330,30 +350,42 @@ def create_request(
             )
         ).scalars().all()
 
-    # Validate other ASSIGNED_ONLY offices
+    # Validate directly declared active LAB_WORKSHOP offices
+    lab_workshop_depts = []
+    if lab_workshop_department_ids:
+        for did in lab_workshop_department_ids:
+            d = session.get(Department, did)
+            if not d or not d.is_active:
+                raise WorkflowNotFoundError(f"Department ID {did} not found or is inactive.")
+
+            if d.applicability != DepartmentApplicability.LAB_WORKSHOP:
+                raise WorkflowBadRequestError(
+                    f"Department '{d.name}' cannot be declared as a lab/workshop. Only active Lab / Workshop departments are allowed."
+                )
+
+            active_officers = active_officers_for(session, d.id)
+            if not active_officers:
+                raise WorkflowConflictError(
+                    f"Department '{d.name}' has no active dealing officer. Cannot submit clearance request."
+                )
+
+            lab_workshop_depts.append(d)
+
+    # Validate other active ASSIGNED_ONLY offices (additional facilities)
     other_depts = []
     if other_department_ids:
         for did in other_department_ids:
             d = session.get(Department, did)
-            if not d:
-                raise WorkflowNotFoundError(f"Department ID {did} not found.")
+            if not d or not d.is_active:
+                raise WorkflowNotFoundError(f"Department ID {did} not found or is inactive.")
 
-            # 1. only ASSIGNED_ONLY offices
+            # 1. only active ASSIGNED_ONLY offices
             if d.applicability != DepartmentApplicability.ASSIGNED_ONLY:
                 raise WorkflowBadRequestError(
                     f"Department '{d.name}' cannot be declared as an other office. Only ASSIGNED_ONLY departments are allowed."
                 )
 
-            # 2. not linked to a lab subject
-            linked_course = session.execute(
-                select(LabCourse.id).where(LabCourse.lab_department_id == d.id)
-            ).first()
-            if linked_course:
-                raise WorkflowBadRequestError(
-                    f"Department '{d.name}' is linked to a lab subject and must be declared through lab subjects, not as an other office."
-                )
-
-            # 3. each with an active officer
+            # 2. active officer check
             active_officers = active_officers_for(session, d.id)
             if not active_officers:
                 raise WorkflowConflictError(
@@ -367,6 +399,7 @@ def create_request(
         roster,
         declared_is_hosteller=declared_is_hosteller,
         declared_lab_courses=declared_courses,
+        lab_workshop_departments=lab_workshop_depts,
         other_departments=other_depts,
     )
 
@@ -817,8 +850,13 @@ def add_department_to_request(
         raise WorkflowConflictError("Cannot add department to a finalized clearance request.")
 
     dept = session.get(Department, department_id)
-    if not dept:
-        raise WorkflowNotFoundError(f"Department {department_id} not found.")
+    if not dept or not dept.is_active:
+        raise WorkflowNotFoundError(f"Department {department_id} not found or is inactive.")
+
+    if dept.applicability not in (DepartmentApplicability.LAB_WORKSHOP, DepartmentApplicability.ASSIGNED_ONLY):
+        raise WorkflowBadRequestError(
+            f"Department '{dept.name}' cannot be added. Only active Lab / Workshop and Additional Facility departments can be added."
+        )
 
     # Check if department is already part of the request
     existing_approval = session.execute(
@@ -937,8 +975,13 @@ def add_office_to_request(
         raise WorkflowConflictError("Cannot add department to a finalized clearance request.")
 
     dept = session.get(Department, department_id)
-    if not dept:
-        raise WorkflowNotFoundError(f"Department {department_id} not found.")
+    if not dept or not dept.is_active:
+        raise WorkflowNotFoundError(f"Department {department_id} not found or is inactive.")
+
+    if dept.applicability not in (DepartmentApplicability.LAB_WORKSHOP, DepartmentApplicability.ASSIGNED_ONLY):
+        raise WorkflowBadRequestError(
+            f"Department '{dept.name}' cannot be added. Only active Lab / Workshop and Additional Facility departments can be added."
+        )
 
     # Check duplicate
     existing_approval = session.execute(

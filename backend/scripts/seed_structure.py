@@ -106,13 +106,8 @@ SERVICE_DEPARTMENTS_HOSTELLER = [
     "Hostel (Boys/Girls)",
 ]
 
-# Service departments — ASSIGNED_ONLY (labs, workshops, others)
-ASSIGNED_ONLY_LABS = [f"Lab-{i}" for i in range(1, 10)]  # Lab-1 to Lab-9
-ASSIGNED_ONLY_WORKSHOPS = [f"Workshop-{i}" for i in range(1, 4)]  # Workshop-1 to Workshop-3
-ASSIGNED_ONLY_OTHERS = ["Others"]
-SERVICE_DEPARTMENTS_ASSIGNED = (
-    ASSIGNED_ONLY_LABS + ASSIGNED_ONLY_WORKSHOPS + ASSIGNED_ONLY_OTHERS
-)
+# Service departments — ASSIGNED_ONLY (additional facilities)
+SERVICE_DEPARTMENTS_ASSIGNED = ["Others"]
 
 
 def upsert_returning_id(session, model, conflict_cols: list[str], values: dict) -> int:

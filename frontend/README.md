@@ -98,12 +98,12 @@ Responsibility is clearly distributed across six distinct university actors to p
 - **5-Step Application Wizard**:
   - Step 1: Bank verification.
   - Step 2: Hostel residency declaration (`is_hosteller`).
-  - Step 3: Dynamic departmental lab course selection.
-  - Step 4: Supplemental assigned-only offices and freeform notes.
-  - Step 5: Unified review and submission confirmation (`POST /student/requests`).
-- **Parallel Clearance Checklist**: Live status badges (`PENDING`, `APPROVED`, `REJECTED`), previous rejection history callouts, and resubmission counters.
+  - Step 3: Attended laboratory & workshop subjects from academic catalog, plus collapsible fallback multi-select for unlisted labs/workshops sent as `lab_workshop_department_ids`.
+  - Step 4: Optional additional facilities with note textarea (`GET /departments/additional-facilities`).
+  - Step 5: Grouped review and submission confirmation (`POST /student/requests`).
+- **Parallel Clearance Checklist**: Live status badges (`PENDING`, `APPROVED`, `REJECTED`), category badges, previous rejection history callouts, and resubmission counters.
 - **Targeted Resubmission**: Resubmit strictly to the rejected department without resetting other approvals (`POST /student/requests/{id}/departments/{d_id}/resubmit`).
-- **Mid-Clearance Expansion**: Add supplemental lab subjects (`POST /student/requests/{id}/lab-courses`) or assigned offices.
+- **Mid-Clearance Expansion**: Add supplemental lab subjects / workshops or additional facilities through dedicated actions.
 - **Certificate Download**: Generates official PDF clearance certificate on demand with an embedded QR code and verification URL (`GET /student/requests/{id}/certificate.pdf`).
 
 ### 2. Department Officer Interface (`/officer`)
@@ -114,8 +114,8 @@ Responsibility is clearly distributed across six distinct university actors to p
 - **Decision Modal**: Approve or reject with live `x/500` character counter; remarks are strictly mandatory upon rejection. Plain text notice clarifies valid approval remarks.
 - **Academic Officer Suite**:
   - **Academic Role Guarding**: Roster and Lab Catalog links appear strictly when the officer belongs to at least one academic department. Pure service officers never see roster or catalog views.
-  - **Student Roster (`/officer/roster`)**: Programme-scoped student roster management, single student creation, profile editing (with 409 account conflict notice), CSV batch upload with template download, and department scope filter when assigned to multiple academic faculties.
-  - **Lab Catalog (`/officer/lab-catalog`)**: Laboratory subjects catalog mapped to service departments, create course dialog with academic department selector, active toggle, and CSV upload with template.
+  - **Student Roster (`/officer/roster`)**: Programme-scoped student roster management, single student creation, profile editing (including degree programme assignment and 409 conflict notices), CSV batch upload with template download, and department scope filter.
+  - **Lab Catalog (`/officer/lab-catalog`)**: Laboratory subjects catalog, subject edit dialog, "My labs and workshops" tab (`GET /department/lab-workshops`) for creating and managing active workshops, and CSV upload with dry run verification (`dry_run=true`) and optional missing office creation (`create_missing_offices=true`).
   - **Clearance Dossier & Add Office (`/officer/requests/:id`)**: Comprehensive student dossier view and post-submission office dispatch modal (`POST /department/requests/{id}/add-department`).
 
 ### 3. Chairperson / HoD Queue & Dossier (`/hod` & `/hod/requests/:id`)
@@ -133,20 +133,25 @@ Responsibility is clearly distributed across six distinct university actors to p
 
 ### 5. Institutional Administration (`/admin`)
 - **Offices & Staffing Dashboard (`/admin/offices`)**:
-  - Master table of all academic and service departments with active officers and HoDs.
-  - Staffing gap badges (`Needs Officer`, `Needs HoD`) and summary metrics.
+  - 5 Category Tabs: `University offices`, `Hostel`, `Labs & Workshops`, `Additional facilities`, `Academic departments`.
+  - Inactive office toggle (`showInactive`), search filter, subject counts for labs, and staffing health badges (`Needs Officer`, `Needs HoD`).
   - Cross-office badges next to staff names showing other university offices they represent.
-  - Quick action buttons to directly assign officers or HoDs to understaffed offices.
+  - Row selection for bulk category modification (`POST /admin/departments/bulk-category`).
+  - Office creation with category selector, office editing, activate/deactivate dialogs, and safe deletion (with 409 handling explaining deactivation).
+- **Academic Structure Management (`/admin/structure`)**:
+  - Dedicated tabs for `Faculties`, `Academic departments`, and `Programmes`.
+  - Complete creation, renaming, and activation/deactivation workflows with department/faculty selectors and API constraint explanations.
 - **Staff & User Directory (`/admin/users`)**:
   - Filterable by search query, role, department, and active status.
   - Multi-select department assignment on user creation (officers require $\ge 1$ office; Chairperson / HoD role is strictly restricted to academic departments).
   - Staff directory displays badges for all assigned departments per user.
   - User detail panel to view, add, and remove department memberships (protects against removing the last department, advising account deactivation instead).
+  - User profile editing (`PATCH /admin/users/{id}`) for name and email, with Google account unlink option protected by confirmation dialog.
   - Bulk staff CSV upload with template download supporting pipe-separated departments (e.g. `Library|Sports`), row-by-row report, and one-time credentials export.
   - On-demand password reset and account activate/deactivate toggle (with self-deactivation protection).
   - One-time temporary password modal that wipes credentials from memory upon dismissal.
 - **Master Student Roster (`/admin/roster`)**: Fallback student directory search, profile editor, and CSV batch ingestion.
-- **Master Lab Catalog (`/admin/lab-courses`)**: Global laboratory course directory, creation modal, edit modal, and CSV ingestion.
+- **Master Lab Catalog (`/admin/lab-courses`)**: Global laboratory course directory, edit dialog, CSV ingestion with dry-run verification preview, missing office creation toggle, and unstaffed office warnings.
 
 ### 6. Public Certificate Verification (`/verify`, `/verify/:code`)
 - **Zero-Authentication Verification**: Publicly accessible page for employers and third parties.
@@ -189,8 +194,9 @@ frontend/
 │   │   ├── axios.js        # Axios instance with 401 session-expired interceptor
 │   │   └── utils.js        # Class name merge utilities (clsx + twMerge)
 │   ├── pages/              # View layer organized by user role
-│   │   ├── admin/          # Admin offices, users directory, roster & lab fallbacks
+│   │   ├── admin/          # Admin offices, structure, users directory, roster & lab fallbacks
 │   │   │   ├── AdminOfficesPage.jsx
+│   │   │   ├── AdminAcademicStructurePage.jsx
 │   │   │   ├── AdminUsersPage.jsx
 │   │   │   ├── AdminRosterPage.jsx
 │   │   │   └── AdminLabCoursesPage.jsx

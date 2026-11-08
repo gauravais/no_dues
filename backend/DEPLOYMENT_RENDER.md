@@ -189,9 +189,9 @@ To verify that attackers cannot bypass IP rate limits or spoof IPs by injecting 
 
 ## 11. Backup & Disaster Recovery
 
-### Before Deploying Migration 0011 to Neon, Take a pg_dump Backup
+### Before Deploying Migration 0012 to Neon, Take a pg_dump Backup
 
-Before applying migration `0011_user_departments` (or any schema migration) on your live Neon PostgreSQL database, take a full binary backup from your local machine.
+Before applying migration `0012_department_categories` (or any schema migration) on your live Neon PostgreSQL database, take a full binary backup from your local machine.
 
 #### 1. Take Pre-Migration Backup (`pg_dump`)
 
@@ -205,10 +205,10 @@ pg_dump "$NEON_DATABASE_URL" \
   --no-owner \
   --no-privileges \
   --verbose \
-  --file="neon_pre_0011_backup_$(date +%Y%m%d_%H%M%S).dump"
+  --file="neon_pre_0012_backup_$(date +%Y%m%d_%H%M%S).dump"
 
 # Verify the backup file was created and is non-empty
-ls -lh neon_pre_0011_backup_*.dump
+ls -lh neon_pre_0012_backup_*.dump
 ```
 
 #### 2. Restore Instructions (in case of disaster or recovery)
@@ -224,7 +224,7 @@ pg_restore \
   --no-owner \
   --no-privileges \
   --verbose \
-  "neon_pre_0011_backup_YYYYMMDD_HHMMSS.dump"
+  "neon_pre_0012_backup_YYYYMMDD_HHMMSS.dump"
 ```
 
 #### 3. Neon Point-in-Time Restore (PITR) Alternative
@@ -233,6 +233,19 @@ Neon maintains continuous write-ahead logs (WAL). In the [Neon Console](https://
 2. Click **New Branch**.
 3. Select **Point in Time** and pick the timestamp immediately prior to deployment (within the last 7 days).
 4. Point the Render `DATABASE_URL` environment variable to the new branch if instant rollback without `pg_restore` is preferred.
+
+#### 4. Post-Deploy Checklist for Migration 0012
+After deploying the Docker container with migration 0012 to Render:
+- [ ] Check deployment logs to confirm `0012_department_categories` ran successfully: `alembic current` should report `0012_department_categories (head)`.
+- [ ] Verify application health: `curl -s https://nodues-backend.onrender.com/health/live` returns `{"status":"ok"}`.
+- [ ] Verify office categories via `GET /admin/departments`:
+  - Categories are cleanly divided into `ACADEMIC`, `UNIVERSITY_OFFICE`, `HOSTEL`, `LAB_WORKSHOP`, and `ADDITIONAL_FACILITY`.
+  - User-facing labels show human-readable titles (e.g., "Academic department", "University office", "Hostel", "Lab / Workshop", "Additional facility").
+  - No occurrences of raw "service" or "assigned-only" labels.
+- [ ] Verify student lab catalog (`GET /student/lab-catalog`):
+  - Returns `direct_offices` containing active `LAB_WORKSHOP` offices.
+  - Returns `assigned_only_departments` containing active `ADDITIONAL_FACILITY` offices.
+- [ ] Verify existing lab courses still resolve to their respective lab/workshop departments.
 
 ---
 

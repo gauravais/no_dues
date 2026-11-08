@@ -30,13 +30,15 @@ import {
   Send,
   RotateCw,
   Check,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 
 const STEPS = [
   { id: 1, label: 'Bank Details', icon: Landmark, description: 'Refund account' },
   { id: 2, label: 'Residence', icon: Home, description: 'Hosteller or day scholar' },
-  { id: 3, label: 'Labs & Workshops', icon: FlaskConical, description: 'Subjects used' },
-  { id: 4, label: 'Other Offices', icon: Building2, description: 'Notes & facilities' },
+  { id: 3, label: 'Labs & Workshops', icon: FlaskConical, description: 'Attended labs' },
+  { id: 4, label: 'Additional Facilities', icon: Building2, description: 'Optional facilities' },
   { id: 5, label: 'Review & Submit', icon: CheckCircle2, description: 'Confirmation' },
 ]
 
@@ -64,8 +66,13 @@ export function StudentApplyPage() {
   // Step 3: Labs and workshops state
   const [selectedLabIds, setSelectedLabIds] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedDirectLabIds, setSelectedDirectLabIds] = useState([])
+  const [directLabsOpen, setDirectLabsOpen] = useState(false)
+  const [directLabSearch, setDirectLabSearch] = useState('')
 
-  // Step 4: Other offices note state (max 500 chars)
+  // Step 4: Additional facilities state & note
+  const [selectedOtherDepartmentIds, setSelectedOtherDepartmentIds] = useState([])
+  const [otherDeptsSearch, setOtherDeptsSearch] = useState('')
   const [othersNote, setOthersNote] = useState('')
 
   // Step 5: Review & confirmation state
@@ -112,23 +119,32 @@ export function StudentApplyPage() {
       try {
         return await studentApi.getLabCatalog()
       } catch (err) {
-        if (err.response?.status === 404) return { lab_courses: [], assigned_only_departments: [] }
+        if (err.response?.status === 404) return { lab_courses: [], direct_offices: [], assigned_only_departments: [] }
         throw err
       }
     },
     staleTime: 300000,
   })
 
-  // 4. Fetch ASSIGNED_ONLY departments
+  // 4. Fetch additional facilities
   const { data: assignedOnlyDepts = [], isLoading: deptsLoading } = useQuery({
-    queryKey: ['departments', 'assigned-only'],
+    queryKey: ['departments', 'additional-facilities'],
     queryFn: async () => {
-      return await departmentApi.getAssignedOnlyDepartments()
+      try {
+        return await studentApi.getAdditionalFacilities()
+      } catch {
+        return await departmentApi.getAssignedOnlyDepartments()
+      }
     },
     staleTime: 300000,
   })
 
   const labCourses = useMemo(() => labCatalogData?.lab_courses || [], [labCatalogData])
+  const directOffices = useMemo(() => labCatalogData?.direct_offices || [], [labCatalogData])
+  const additionalFacilities = useMemo(
+    () => (labCatalogData?.assigned_only_departments?.length ? labCatalogData.assigned_only_departments : assignedOnlyDepts),
+    [labCatalogData, assignedOnlyDepts]
+  )
 
   // Pre-fill holder name from bank details or auth profile
   useEffect(() => {
@@ -171,6 +187,32 @@ export function StudentApplyPage() {
     return labCourses.filter((c) => selectedLabIds.includes(c.id))
   }, [labCourses, selectedLabIds])
 
+  // Direct offices filter and selection
+  const filteredDirectOffices = useMemo(() => {
+    if (!directLabSearch.trim()) return directOffices
+    const q = directLabSearch.toLowerCase().trim()
+    return directOffices.filter(
+      (o) => o.name?.toLowerCase().includes(q) || o.description?.toLowerCase().includes(q)
+    )
+  }, [directOffices, directLabSearch])
+
+  const selectedDirectOfficesList = useMemo(() => {
+    return directOffices.filter((o) => selectedDirectLabIds.includes(o.id))
+  }, [directOffices, selectedDirectLabIds])
+
+  // Additional facilities filter and selection
+  const filteredAdditionalFacilities = useMemo(() => {
+    if (!otherDeptsSearch.trim()) return additionalFacilities
+    const q = otherDeptsSearch.toLowerCase().trim()
+    return additionalFacilities.filter(
+      (d) => d.name?.toLowerCase().includes(q) || d.description?.toLowerCase().includes(q)
+    )
+  }, [additionalFacilities, otherDeptsSearch])
+
+  const selectedOtherDeptsList = useMemo(() => {
+    return additionalFacilities.filter((d) => selectedOtherDepartmentIds.includes(d.id))
+  }, [additionalFacilities, selectedOtherDepartmentIds])
+
   // Lab selection toggle
   const toggleLabCourse = (courseId) => {
     setSelectedLabIds((prev) =>
@@ -180,6 +222,30 @@ export function StudentApplyPage() {
 
   const removeLabCourse = (courseId) => {
     setSelectedLabIds((prev) => prev.filter((id) => id !== courseId))
+  }
+
+  const toggleDirectLabOffice = (officeId) => {
+    const target = directOffices.find((o) => o.id === officeId)
+    if (target && target.has_active_officer === false) return
+    setSelectedDirectLabIds((prev) =>
+      prev.includes(officeId) ? prev.filter((id) => id !== officeId) : [...prev, officeId]
+    )
+  }
+
+  const removeDirectLabOffice = (officeId) => {
+    setSelectedDirectLabIds((prev) => prev.filter((id) => id !== officeId))
+  }
+
+  const toggleOtherDepartment = (deptId) => {
+    const target = additionalFacilities.find((d) => d.id === deptId)
+    if (target && target.has_active_officer === false) return
+    setSelectedOtherDepartmentIds((prev) =>
+      prev.includes(deptId) ? prev.filter((id) => id !== deptId) : [...prev, deptId]
+    )
+  }
+
+  const removeOtherDepartment = (deptId) => {
+    setSelectedOtherDepartmentIds((prev) => prev.filter((id) => id !== deptId))
   }
 
   // Handle Bank details submission
@@ -291,6 +357,8 @@ export function StudentApplyPage() {
       await studentApi.createRequest({
         isHosteller: Boolean(isHosteller),
         labCourseIds: selectedLabIds,
+        labWorkshopDepartmentIds: selectedDirectLabIds,
+        otherOfficeIds: selectedOtherDepartmentIds,
         othersNote: othersNote.trim() || null,
       })
       toast.success('Clearance application submitted successfully!')
@@ -751,14 +819,14 @@ export function StudentApplyPage() {
                     <FlaskConical className="w-4 h-4" />
                   </div>
                   <div>
-                    <CardTitle className="text-lg font-bold">Step 3: Laboratories & Workshops</CardTitle>
+                    <CardTitle className="text-lg font-bold">Step 3: Labs and workshops you attended</CardTitle>
                     <CardDescription className="text-xs">
-                      Select the laboratory subjects and workshop facilities you utilized.
+                      Select the laboratory subjects and workshop facilities you attended during your studies.
                     </CardDescription>
                   </div>
                 </div>
                 <Badge variant="outline" className="text-xs font-mono bg-zinc-50">
-                  {selectedLabIds.length} Selected
+                  {selectedLabIds.length + selectedDirectLabIds.length} Selected
                 </Badge>
               </div>
             </CardHeader>
@@ -773,13 +841,18 @@ export function StudentApplyPage() {
               </Alert>
 
               {/* Selected Chips Strip */}
-              {selectedCoursesList.length > 0 && (
+              {(selectedCoursesList.length > 0 || selectedDirectOfficesList.length > 0) && (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-zinc-700">Selected Subjects ({selectedCoursesList.length}):</span>
+                    <span className="font-semibold text-zinc-700">
+                      Selected Labs & Workshops ({selectedCoursesList.length + selectedDirectOfficesList.length}):
+                    </span>
                     <button
                       type="button"
-                      onClick={() => setSelectedLabIds([])}
+                      onClick={() => {
+                        setSelectedLabIds([])
+                        setSelectedDirectLabIds([])
+                      }}
                       className="text-[11px] text-zinc-500 hover:text-black underline"
                     >
                       Clear all
@@ -788,7 +861,7 @@ export function StudentApplyPage() {
                   <div className="flex flex-wrap gap-1.5 p-2.5 rounded-lg bg-zinc-50 border border-zinc-200">
                     {selectedCoursesList.map((c) => (
                       <Badge
-                        key={c.id}
+                        key={`course-${c.id}`}
                         variant="secondary"
                         className="bg-white border border-zinc-300 text-zinc-900 text-xs py-1 px-2.5 flex items-center gap-1.5 shadow-2xs"
                       >
@@ -798,6 +871,24 @@ export function StudentApplyPage() {
                           type="button"
                           onClick={() => removeLabCourse(c.id)}
                           aria-label={`Remove ${c.name}`}
+                          className="hover:bg-zinc-200 rounded p-0.5 text-zinc-500 hover:text-black"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                    {selectedDirectOfficesList.map((o) => (
+                      <Badge
+                        key={`direct-${o.id}`}
+                        variant="secondary"
+                        className="bg-white border border-zinc-300 text-zinc-900 text-xs py-1 px-2.5 flex items-center gap-1.5 shadow-2xs"
+                      >
+                        <span className="text-zinc-700 font-semibold truncate max-w-[200px]">{o.name}</span>
+                        <span className="text-[10px] text-zinc-400 font-mono">(Direct office)</span>
+                        <button
+                          type="button"
+                          onClick={() => removeDirectLabOffice(o.id)}
+                          aria-label={`Remove ${o.name}`}
                           className="hover:bg-zinc-200 rounded p-0.5 text-zinc-500 hover:text-black"
                         >
                           <X className="w-3 h-3" />
@@ -841,7 +932,7 @@ export function StudentApplyPage() {
                     : 'No specific lab courses configured for your programme. An empty selection is permitted.'}
                 </div>
               ) : (
-                <div className="space-y-6 max-h-[380px] overflow-y-auto pr-1">
+                <div className="space-y-6 max-h-[340px] overflow-y-auto pr-1">
                   {Object.entries(groupedLabCourses).map(([groupTitle, courses]) => (
                     <div key={groupTitle} className="space-y-2">
                       <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 sticky top-0 bg-white py-1">
@@ -884,6 +975,102 @@ export function StudentApplyPage() {
                   ))}
                 </div>
               )}
+
+              {/* Collapsible "My lab or workshop is not listed" panel */}
+              <div className="border border-zinc-200 rounded-xl overflow-hidden bg-zinc-50/40">
+                <button
+                  type="button"
+                  onClick={() => setDirectLabsOpen((prev) => !prev)}
+                  className="w-full flex items-center justify-between p-3.5 text-xs font-semibold text-zinc-900 hover:bg-zinc-100/60 transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-zinc-600" />
+                    <span>My lab or workshop is not listed</span>
+                    {selectedDirectLabIds.length > 0 && (
+                      <Badge variant="outline" className="text-[10px] bg-white font-mono">
+                        {selectedDirectLabIds.length} selected
+                      </Badge>
+                    )}
+                  </div>
+                  {directLabsOpen ? (
+                    <ChevronUp className="w-4 h-4 text-zinc-500" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-zinc-500" />
+                  )}
+                </button>
+
+                {directLabsOpen && (
+                  <div className="p-4 pt-1 border-t border-zinc-200 bg-white space-y-3">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      If you attended a specific laboratory or workshop that does not appear in your curriculum subjects list, choose the facility directly below:
+                    </p>
+
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-zinc-400" />
+                      <Input
+                        value={directLabSearch}
+                        onChange={(e) => setDirectLabSearch(e.target.value)}
+                        placeholder="Search labs & workshops by name..."
+                        className="pl-8 text-xs h-8"
+                      />
+                    </div>
+
+                    {filteredDirectOffices.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-muted-foreground">
+                        {directLabSearch
+                          ? `No lab or workshop matching "${directLabSearch}".`
+                          : 'No additional lab or workshop offices found.'}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[220px] overflow-y-auto pt-1">
+                        {filteredDirectOffices.map((office) => {
+                          const isChecked = selectedDirectLabIds.includes(office.id)
+                          const isAvailable = office.has_active_officer !== false
+                          return (
+                            <label
+                              key={office.id}
+                              className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-xs transition-colors ${
+                                !isAvailable
+                                  ? 'border-zinc-200 bg-zinc-50/70 text-zinc-400 cursor-not-allowed opacity-75'
+                                  : isChecked
+                                    ? 'border-black bg-zinc-50 ring-1 ring-black/5 cursor-pointer'
+                                    : 'border-zinc-200 bg-white hover:bg-zinc-50/50 cursor-pointer'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                disabled={!isAvailable}
+                                onChange={() => {
+                                  if (isAvailable) toggleDirectLabOffice(office.id)
+                                }}
+                                className="mt-0.5 rounded border-zinc-300 text-black focus:ring-black h-3.5 w-3.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <span
+                                  className={`font-semibold block truncate ${
+                                    isAvailable ? 'text-zinc-900' : 'text-zinc-500'
+                                  }`}
+                                >
+                                  {office.name}
+                                </span>
+                                {office.description && (
+                                  <p className="text-[11px] text-zinc-500 line-clamp-1">{office.description}</p>
+                                )}
+                                {!isAvailable && (
+                                  <p className="text-[11px] text-amber-700 font-medium mt-1">
+                                    Not available yet. Contact your department office.
+                                  </p>
+                                )}
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </CardContent>
 
             <CardFooter className="p-6 pt-0 border-t border-border flex items-center justify-between">
@@ -896,14 +1083,14 @@ export function StudentApplyPage() {
                 onClick={handleNext}
                 className="bg-black text-white hover:bg-zinc-800 text-xs font-semibold gap-1.5"
               >
-                Continue to Other Offices
+                Continue to Additional Facilities
                 <ArrowRight className="w-3.5 h-3.5" />
               </Button>
             </CardFooter>
           </Card>
         )}
 
-        {/* STEP 4: Other Offices */}
+        {/* STEP 4: Additional Facilities (Optional) */}
         {currentStep === 4 && (
           <Card className="border-border bg-white shadow-card">
             <CardHeader className="p-6 pb-4">
@@ -912,36 +1099,129 @@ export function StudentApplyPage() {
                   <Building2 className="w-4 h-4" />
                 </div>
                 <div>
-                  <CardTitle className="text-lg font-bold">Step 4: Additional Facilities & Notes</CardTitle>
+                  <CardTitle className="text-lg font-bold">Step 4: Additional facilities (optional)</CardTitle>
                   <CardDescription className="text-xs">
-                    Specialized facilities not covered in the standard subject catalog, plus any specific notes.
+                    Declare specialized facilities you utilized and provide any supporting notes.
                   </CardDescription>
                 </div>
               </div>
             </CardHeader>
 
             <CardContent className="p-6 pt-0 space-y-6">
-              {/* Informational list of assigned-only departments */}
+              {/* Mandatory Help Text Callout */}
+              <Alert className="bg-zinc-50 border-zinc-200 text-zinc-900 py-3 rounded-lg">
+                <Building2 className="h-4 w-4 text-zinc-700" />
+                <AlertDescription className="text-xs font-medium leading-relaxed">
+                  Only add a facility you actually used, for example Others.
+                </AlertDescription>
+              </Alert>
+
+              {/* Selected Facilities Strip */}
+              {selectedOtherDeptsList.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-zinc-700">
+                      Selected Additional Facilities ({selectedOtherDeptsList.length}):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedOtherDepartmentIds([])}
+                      className="text-[11px] text-zinc-500 hover:text-black underline"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 p-2.5 rounded-lg bg-zinc-50 border border-zinc-200">
+                    {selectedOtherDeptsList.map((d) => (
+                      <Badge
+                        key={`other-${d.id}`}
+                        variant="secondary"
+                        className="bg-white border border-zinc-300 text-zinc-900 text-xs py-1 px-2.5 flex items-center gap-1.5 shadow-2xs"
+                      >
+                        <span className="text-zinc-800 font-semibold">{d.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeOtherDepartment(d.id)}
+                          aria-label={`Remove ${d.name}`}
+                          className="hover:bg-zinc-200 rounded p-0.5 text-zinc-500 hover:text-black"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Searchable multi-select of additional facilities */}
               <div className="space-y-2">
                 <Label className="text-xs font-semibold text-zinc-800 block">
-                  Specialized University Facilities
+                  Select Additional Facilities
                 </Label>
-                <p className="text-xs text-muted-foreground">
-                  Below are specialized laboratories and workshops. If you conducted projects or incurred equipment responsibilities in any of these, state them in the note below so your academic department can include them.
-                </p>
 
-                {deptsLoading ? (
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-zinc-400" />
+                  <Input
+                    value={otherDeptsSearch}
+                    onChange={(e) => setOtherDeptsSearch(e.target.value)}
+                    placeholder="Search additional facilities..."
+                    className="pl-8 text-xs h-8"
+                  />
+                </div>
+
+                {deptsLoading || catalogLoading ? (
                   <Skeleton className="h-20 w-full" />
+                ) : filteredAdditionalFacilities.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-muted-foreground border border-dashed rounded-lg">
+                    {otherDeptsSearch
+                      ? `No facilities matching "${otherDeptsSearch}".`
+                      : 'No additional facilities listed.'}
+                  </div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 max-h-[180px] overflow-y-auto">
-                    {assignedOnlyDepts.map((d) => (
-                      <div key={d.id} className="p-2.5 rounded-lg border border-zinc-200 bg-zinc-50/50 text-xs space-y-0.5">
-                        <span className="font-semibold text-zinc-900 block">{d.name}</span>
-                        {d.description && (
-                          <p className="text-[11px] text-zinc-500 line-clamp-1">{d.description}</p>
-                        )}
-                      </div>
-                    ))}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 max-h-[220px] overflow-y-auto">
+                    {filteredAdditionalFacilities.map((dept) => {
+                      const isChecked = selectedOtherDepartmentIds.includes(dept.id)
+                      const isAvailable = dept.has_active_officer !== false
+                      return (
+                        <label
+                          key={dept.id}
+                          className={`flex items-start gap-2.5 p-3 rounded-lg border text-xs transition-colors ${
+                            !isAvailable
+                              ? 'border-zinc-200 bg-zinc-50/70 text-zinc-400 cursor-not-allowed opacity-75'
+                              : isChecked
+                                ? 'border-black bg-zinc-50 ring-1 ring-black/5 cursor-pointer'
+                                : 'border-zinc-200 bg-white hover:bg-zinc-50/50 cursor-pointer'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            disabled={!isAvailable}
+                            onChange={() => {
+                              if (isAvailable) toggleOtherDepartment(dept.id)
+                            }}
+                            className="mt-0.5 rounded border-zinc-300 text-black focus:ring-black h-3.5 w-3.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <span
+                              className={`font-semibold block ${
+                                isAvailable ? 'text-zinc-900' : 'text-zinc-500'
+                              }`}
+                            >
+                              {dept.name}
+                            </span>
+                            {dept.description && (
+                              <p className="text-[11px] text-zinc-500 line-clamp-1">{dept.description}</p>
+                            )}
+                            {!isAvailable && (
+                              <p className="text-[11px] text-amber-700 font-medium mt-1">
+                                Not available yet. Contact your department office.
+                              </p>
+                            )}
+                          </div>
+                        </label>
+                      )
+                    })}
                   </div>
                 )}
               </div>
@@ -1058,54 +1338,84 @@ export function StudentApplyPage() {
                 </div>
               </div>
 
-              {/* 3. Declared Labs Summary */}
-              <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50/50 space-y-2 text-xs">
+              {/* 3. Grouped Heading: Labs and workshops you attended */}
+              <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50/50 space-y-3 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-zinc-950 flex items-center gap-1.5">
                     <FlaskConical className="w-3.5 h-3.5 text-zinc-700" />
-                    Declared Labs & Workshops ({selectedCoursesList.length})
+                    Labs and workshops you attended ({selectedCoursesList.length + selectedDirectOfficesList.length})
                   </span>
                   <button
                     type="button"
                     onClick={() => setCurrentStep(3)}
                     className="text-[11px] text-zinc-500 hover:text-black underline"
                   >
-                    Edit list
+                    Edit
                   </button>
                 </div>
-                {selectedCoursesList.length === 0 ? (
-                  <p className="text-zinc-500 italic pt-1">No specialized lab courses declared.</p>
+                {selectedCoursesList.length === 0 && selectedDirectOfficesList.length === 0 ? (
+                  <p className="text-zinc-500 italic pt-0.5">None declared (empty declaration permitted).</p>
                 ) : (
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {selectedCoursesList.map((c) => (
-                      <Badge key={c.id} variant="secondary" className="bg-white border text-xs py-0.5">
-                        <span className="font-mono font-semibold mr-1">{c.code}</span>
-                        {c.name}
-                        <span className="text-[10px] text-zinc-500 ml-1.5">({c.lab_department_name})</span>
-                      </Badge>
-                    ))}
+                  <div className="space-y-2 pt-1">
+                    {selectedCoursesList.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedCoursesList.map((c) => (
+                          <Badge key={`rev-course-${c.id}`} variant="secondary" className="bg-white border text-xs py-0.5">
+                            <span className="font-mono font-semibold mr-1">{c.code}</span>
+                            {c.name}
+                            <span className="text-[10px] text-zinc-500 ml-1.5">({c.lab_department_name})</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    {selectedDirectOfficesList.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {selectedDirectOfficesList.map((o) => (
+                          <Badge key={`rev-direct-${o.id}`} variant="secondary" className="bg-white border text-xs py-0.5">
+                            <span className="font-semibold text-zinc-900">{o.name}</span>
+                            <span className="text-[10px] text-zinc-500 ml-1.5">(Direct office)</span>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
 
-              {/* 4. Notes Summary */}
-              <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50/50 space-y-1.5 text-xs">
+              {/* 4. Grouped Heading: Additional facilities (optional) */}
+              <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50/50 space-y-3 text-xs">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-zinc-950 flex items-center gap-1.5">
                     <Building2 className="w-3.5 h-3.5 text-zinc-700" />
-                    Additional Facilities Note
+                    Additional facilities (optional) ({selectedOtherDeptsList.length})
                   </span>
                   <button
                     type="button"
                     onClick={() => setCurrentStep(4)}
                     className="text-[11px] text-zinc-500 hover:text-black underline"
                   >
-                    Edit note
+                    Edit
                   </button>
                 </div>
-                <p className="text-zinc-700 italic pt-0.5">
-                  {othersNote ? `"${othersNote}"` : 'None provided'}
-                </p>
+
+                {selectedOtherDeptsList.length === 0 ? (
+                  <p className="text-zinc-500 italic pt-0.5">No additional facilities declared.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {selectedOtherDeptsList.map((d) => (
+                      <Badge key={`rev-other-${d.id}`} variant="secondary" className="bg-white border text-xs py-0.5">
+                        <span className="font-semibold text-zinc-900">{d.name}</span>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+
+                <div className="pt-2 border-t border-zinc-200/60">
+                  <span className="text-[11px] font-semibold text-zinc-600 block mb-0.5">Note:</span>
+                  <p className="text-zinc-700 italic">
+                    {othersNote ? `"${othersNote}"` : 'None provided'}
+                  </p>
+                </div>
               </div>
 
               {/* Required confirmation checkbox */}

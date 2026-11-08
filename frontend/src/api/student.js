@@ -38,6 +38,9 @@ export const studentApi = {
     if (Array.isArray(declarations.labCourseIds)) {
       payload.lab_course_ids = declarations.labCourseIds
     }
+    if (Array.isArray(declarations.labWorkshopDepartmentIds)) {
+      payload.lab_workshop_department_ids = declarations.labWorkshopDepartmentIds
+    }
     if (declarations.othersNote !== undefined && declarations.othersNote !== null) {
       payload.others_note = declarations.othersNote.trim() || null
     }
@@ -65,6 +68,14 @@ export const studentApi = {
    */
   async getLabCatalog() {
     const response = await api.get('/student/lab-catalog')
+    return response.data
+  },
+
+  /**
+   * Get additional facilities list (optional ASSIGNED_ONLY offices)
+   */
+  async getAdditionalFacilities() {
+    const response = await api.get('/departments/additional-facilities')
     return response.data
   },
 

@@ -56,6 +56,9 @@ from backend.app.schemas.department import (
     LabCourseListResponse,
     LabCourseUploadRowReport,
     LabCourseUploadResponse,
+    CreateLabWorkshopRequest,
+    UpdateLabWorkshopRequest,
+    LabWorkshopOfficeItem,
 )
 from backend.app.schemas.common import ErrorResponse
 from backend.app.services.exceptions import (
@@ -70,6 +73,7 @@ from backend.app.services.workflow import (
     staff_cancel_request,
     user_department_ids,
     user_academic_department_ids,
+    active_officers_for,
     get_user_departments,
 )
 
@@ -245,9 +249,9 @@ def get_department_queue(
         is_hostel = (d_obj.applicability == DepartmentApplicability.HOSTELLER_ONLY) if d_obj else False
         declared_hostel = bool(req.declared_is_hosteller) if (is_hostel and req) else None
 
-        # others_note: only for offices that are on the request but not linked to any declared lab subject, otherwise null
-        linked_dept_ids = {c.lab_department_id for c in (req.declared_lab_courses or [])} if req else set()
-        note = req.others_note if (req and a.department_id not in linked_dept_ids) else None
+        # others_note: shown only to additional-facility offices
+        is_additional_facility = (d_obj.applicability == DepartmentApplicability.ASSIGNED_ONLY) if d_obj else False
+        note = req.others_note if (req and is_additional_facility) else None
 
         queue_items.append(
             DepartmentQueueItem(
@@ -448,7 +452,14 @@ def get_department_request_detail(
     # 1. Full dossier for academic officer if one of their departments is the student's own academic department
     if student_acad_dept_id and student_acad_dept_id in officer_acad_dept_ids:
         existing_dept_ids = {a.department_id for a in (req.approvals or [])}
-        all_depts = db.execute(select(Department).order_by(Department.name.asc())).scalars().all()
+        can_depts = db.execute(
+            select(Department)
+            .where(
+                Department.applicability.in_([DepartmentApplicability.LAB_WORKSHOP, DepartmentApplicability.ASSIGNED_ONLY]),
+                Department.is_active == True,
+            )
+            .order_by(Department.name.asc())
+        ).scalars().all()
         can_add = [
             DepartmentResponse(
                 id=d.id,
@@ -456,8 +467,11 @@ def get_department_request_detail(
                 kind=d.kind.value,
                 applicability=d.applicability.value,
                 description=d.description,
+                category=d.category,
+                label=d.category_label,
+                is_active=d.is_active,
             )
-            for d in all_depts
+            for d in can_depts
             if d.id not in existing_dept_ids
         ]
 
@@ -467,6 +481,8 @@ def get_department_request_detail(
                 department_id=a.department_id,
                 department_name=a.department.name if a.department else f"Department #{a.department_id}",
                 department_kind=a.department.kind.value if a.department else "service",
+                department_category=a.department.category if a.department else None,
+                department_label=a.department.category_label if a.department else None,
                 status=a.status,
                 remarks=a.remarks,
                 previous_remarks=a.previous_remarks,
@@ -534,10 +550,12 @@ def get_department_request_detail(
         if c.lab_department_id in officer_dept_ids
     ]
 
-    # others_note if applicable (only if any of officer's offices is not linked to any declared lab subject)
-    linked_dept_ids = {c.lab_department_id for c in (req.declared_lab_courses or [])}
-    has_unlinked_office = any(did not in linked_dept_ids for did in officer_dept_ids)
-    note = req.others_note if has_unlinked_office else None
+    # others_note if applicable (only shown to additional facility offices)
+    has_additional_facility = any(
+        d.applicability == DepartmentApplicability.ASSIGNED_ONLY
+        for d in officer_depts
+    )
+    note = req.others_note if has_additional_facility else None
 
     own_approval_items = [
         DepartmentApprovalItem(
@@ -545,6 +563,8 @@ def get_department_request_detail(
             department_id=a.department_id,
             department_name=a.department.name if a.department else f"Department #{a.department_id}",
             department_kind=a.department.kind.value if a.department else "service",
+            department_category=a.department.category if a.department else None,
+            department_label=a.department.category_label if a.department else None,
             status=a.status,
             remarks=a.remarks,
             previous_remarks=a.previous_remarks,
@@ -687,7 +707,10 @@ async def upload_department_roster_csv(
     # Programmes belonging to officer's academic departments
     officer_acad_dept_ids = user_academic_department_ids(current_user, db)
     dept_progs = db.execute(
-        select(Programme).where(Programme.academic_department_id.in_(officer_acad_dept_ids))
+        select(Programme).where(
+            Programme.academic_department_id.in_(officer_acad_dept_ids),
+            Programme.is_active == True,
+        )
     ).scalars().all()
     prog_by_name = {p.name.strip().lower(): p for p in dept_progs}
     prog_by_id = {p.id: p for p in dept_progs}
@@ -1106,6 +1129,37 @@ def patch_department_roster_student(
     if body.address is not None:
         student.address = body.address.strip()
 
+    if body.programme_id is not None:
+        # Check student has no open clearance request
+        open_req = db.execute(
+            select(ClearanceRequest).where(
+                ClearanceRequest.roster_id == student.id,
+                ClearanceRequest.status.not_in([
+                    ClearanceStatus.CLEARED,
+                    ClearanceStatus.REFUND_VERIFIED,
+                    ClearanceStatus.CANCELLED,
+                ]),
+            )
+        ).scalars().first()
+        if open_req:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot change programme while student has an open clearance request.",
+            )
+
+        officer_acad_dept_ids = user_academic_department_ids(current_user, db)
+        target_prog = db.get(Programme, body.programme_id)
+        if (
+            not target_prog
+            or not target_prog.is_active
+            or target_prog.academic_department_id not in officer_acad_dept_ids
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Target programme must be active and belong to one of your academic departments.",
+            )
+        student.programme_id = target_prog.id
+
     student.updated_by_user_id = current_user.id
 
     audit = AuditLog(
@@ -1143,7 +1197,7 @@ def get_department_lab_courses_template(
 ) -> Response:
     csv_content = (
         "code,name,lab_office,specialization\r\n"
-        "CSE-L101,Advanced Programming Lab,Lab-1,Computer Engineering\r\n"
+        "CSE-L101,Advanced Programming Lab,Computing Laboratory,Computer Engineering\r\n"
     )
     return Response(
         content=csv_content,
@@ -1233,10 +1287,10 @@ def create_department_lab_course(
         )
 
     lab_dept = db.get(Department, body.lab_department_id)
-    if not lab_dept or lab_dept.applicability != DepartmentApplicability.ASSIGNED_ONLY:
+    if not lab_dept or not lab_dept.is_active or lab_dept.applicability != DepartmentApplicability.LAB_WORKSHOP:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Assigned lab office must be a service department with ASSIGNED_ONLY applicability.",
+            detail="Assigned lab office must be an active service department with LAB_WORKSHOP applicability.",
         )
 
     acad_dept_ids = user_academic_department_ids(current_user, db)
@@ -1288,6 +1342,8 @@ def create_department_lab_course(
 async def upload_department_lab_courses_csv(
     db: SessionDep,
     file: UploadFile = File(..., description="CSV file with lab courses"),
+    dry_run: bool = Query(False, description="Simulate upload without persisting changes"),
+    create_missing_offices: bool = Query(False, description="Create missing Lab/Workshop offices automatically"),
     current_user: User = Depends(require_academic_officer),
 ) -> LabCourseUploadResponse:
     content = await file.read()
@@ -1312,13 +1368,6 @@ async def upload_department_lab_courses_csv(
                 detail=f"Missing required CSV column '{col}'. Required: {', '.join(required_cols)}",
             )
 
-    # Pre-fetch ASSIGNED_ONLY departments
-    assigned_depts = db.execute(
-        select(Department).where(Department.applicability == DepartmentApplicability.ASSIGNED_ONLY)
-    ).scalars().all()
-    dept_by_name = {d.name.strip().lower(): d for d in assigned_depts}
-    dept_by_id = {d.id: d for d in assigned_depts}
-
     officer_acad_dept_ids = user_academic_department_ids(current_user, db)
     default_acad_id = sorted(list(officer_acad_dept_ids))[0] if officer_acad_dept_ids else current_user.department_id
 
@@ -1326,6 +1375,8 @@ async def upload_department_lab_courses_csv(
     created_count = 0
     updated_count = 0
     rejected_count = 0
+    offices_to_create: list[str] = []
+    offices_without_officers: list[str] = []
 
     for idx, row in enumerate(reader, start=1):
         code = (row.get(fieldnames_map["code"]) or "").strip().upper()
@@ -1338,24 +1389,109 @@ async def upload_department_lab_courses_csv(
             rejected_count += 1
             continue
 
-        matched_dept = dept_by_name.get(lab_office_str.lower())
-        if not matched_dept and lab_office_str.isdigit():
-            matched_dept = dept_by_id.get(int(lab_office_str))
-
-        if not matched_dept:
-            row_reports.append(
-                LabCourseUploadRowReport(
-                    row_number=idx,
-                    code=code,
-                    status="rejected",
-                    reason=f"Lab office '{lab_office_str}' is not an ASSIGNED_ONLY service department",
-                )
-            )
+        if not lab_office_str:
+            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status="rejected", reason="Lab office is mandatory"))
             rejected_count += 1
             continue
 
+        matched_dept = db.execute(
+            select(Department).where(func.lower(Department.name) == lab_office_str.lower())
+        ).scalars().first()
+        if not matched_dept and lab_office_str.isdigit():
+            matched_dept = db.get(Department, int(lab_office_str))
+
+        if matched_dept:
+            if matched_dept.applicability != DepartmentApplicability.LAB_WORKSHOP:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason=f"'{matched_dept.name}' is a {matched_dept.label}, not a Lab / Workshop. Ask the admin to change its type.",
+                    )
+                )
+                rejected_count += 1
+                continue
+            if not matched_dept.is_active:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason=f"Lab office '{matched_dept.name}' is inactive.",
+                    )
+                )
+                rejected_count += 1
+                continue
+        else:
+            if lab_office_str not in offices_to_create:
+                offices_to_create.append(lab_office_str)
+
+            if not create_missing_offices:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason="Office does not exist. Preview and enable 'create missing offices', or ask the admin to create it.",
+                    )
+                )
+                rejected_count += 1
+                continue
+
+            if len(lab_office_str) < 3 or len(lab_office_str) > 80:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason="Lab office name must be between 3 and 80 characters.",
+                    )
+                )
+                rejected_count += 1
+                continue
+
+            if not dry_run:
+                new_office = Department(
+                    name=lab_office_str,
+                    kind=DepartmentKind.service,
+                    applicability=DepartmentApplicability.LAB_WORKSHOP,
+                    is_active=True,
+                    created_by_user_id=current_user.id,
+                )
+                db.add(new_office)
+                db.flush()
+                audit_dept = AuditLog(
+                    user_id=current_user.id,
+                    action="DEPARTMENT_CREATED",
+                    entity_type="Department",
+                    entity_id=new_office.id,
+                    details={"name": new_office.name, "category": "LAB_WORKSHOP", "source": "lab_catalog_upload"},
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(audit_dept)
+                matched_dept = new_office
+            else:
+                matched_dept = Department(
+                    id=-(len(offices_to_create)),
+                    name=lab_office_str,
+                    kind=DepartmentKind.service,
+                    applicability=DepartmentApplicability.LAB_WORKSHOP,
+                    is_active=True,
+                )
+
+        if matched_dept.id > 0:
+            officers = active_officers_for(db, matched_dept.id)
+            if not officers and matched_dept.name not in offices_without_officers:
+                offices_without_officers.append(matched_dept.name)
+        else:
+            if matched_dept.name not in offices_without_officers:
+                offices_without_officers.append(matched_dept.name)
+
         existing = db.execute(
-            select(LabCourse).where(func.upper(LabCourse.code) == code)
+            select(LabCourse)
+            .where(func.upper(LabCourse.code) == code)
+            .options(joinedload(LabCourse.lab_department))
         ).scalars().first()
 
         if existing:
@@ -1371,40 +1507,57 @@ async def upload_department_lab_courses_csv(
                 rejected_count += 1
                 continue
 
-            existing.name = name
-            existing.lab_department_id = matched_dept.id
-            existing.specialization = specialization
-            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status="updated"))
+            old_office_name = existing.lab_department.name if existing.lab_department else f"Department #{existing.lab_department_id}"
+            office_changed = (matched_dept.id > 0 and existing.lab_department_id != matched_dept.id) or (matched_dept.id < 0 and old_office_name.lower() != matched_dept.name.lower())
+
+            if office_changed:
+                status_text = f"updated (office changed from {old_office_name} to {matched_dept.name})"
+            else:
+                status_text = "updated"
+
+            if not dry_run:
+                existing.name = name
+                if matched_dept.id > 0:
+                    existing.lab_department_id = matched_dept.id
+                existing.specialization = specialization
+                existing.is_active = True
+
+            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status=status_text))
             updated_count += 1
         else:
-            new_course = LabCourse(
-                code=code,
-                name=name,
-                academic_department_id=default_acad_id,
-                lab_department_id=matched_dept.id,
-                specialization=specialization,
-                is_active=True,
-            )
-            db.add(new_course)
+            if not dry_run:
+                new_course = LabCourse(
+                    code=code,
+                    name=name,
+                    academic_department_id=default_acad_id,
+                    lab_department_id=matched_dept.id,
+                    specialization=specialization,
+                    is_active=True,
+                )
+                db.add(new_course)
             row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status="created"))
             created_count += 1
 
-    audit = AuditLog(
-        user_id=current_user.id,
-        action="ACADEMIC_LAB_COURSES_UPLOADED",
-        entity_type="LabCourse",
-        entity_id=None,
-        details={
-            "department_id": current_user.department_id,
-            "total_rows": len(row_reports),
-            "created": created_count,
-            "updated": updated_count,
-            "rejected": rejected_count,
-        },
-        created_at=datetime.now(timezone.utc),
-    )
-    db.add(audit)
-    db.commit()
+    if dry_run:
+        db.rollback()
+    else:
+        audit = AuditLog(
+            user_id=current_user.id,
+            action="ACADEMIC_LAB_COURSES_UPLOADED",
+            entity_type="LabCourse",
+            entity_id=None,
+            details={
+                "department_id": current_user.department_id,
+                "total_rows": len(row_reports),
+                "created": created_count,
+                "updated": updated_count,
+                "rejected": rejected_count,
+                "offices_created": offices_to_create,
+            },
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(audit)
+        db.commit()
 
     return LabCourseUploadResponse(
         total_rows=len(row_reports),
@@ -1412,6 +1565,9 @@ async def upload_department_lab_courses_csv(
         updated_count=updated_count,
         rejected_count=rejected_count,
         rows=row_reports,
+        offices_to_create=offices_to_create,
+        offices_without_officers=offices_without_officers,
+        dry_run=dry_run,
     )
 
 
@@ -1421,10 +1577,12 @@ async def upload_department_lab_courses_csv(
     status_code=status.HTTP_200_OK,
     operation_id="patch_department_lab_course",
     summary="Update Lab Course",
-    description="Updates a lab course's name, specialization, or active status.",
+    description="Updates a lab course's code, name, lab department, specialization, or active status.",
     responses={
+        400: {"model": ErrorResponse, "description": "Invalid lab department or applicability"},
         403: {"model": ErrorResponse, "description": "Forbidden for service department officers"},
         404: {"model": ErrorResponse, "description": "Lab course not found in your academic department"},
+        409: {"model": ErrorResponse, "description": "Lab course code already exists"},
     },
 )
 def patch_department_lab_course(
@@ -1445,11 +1603,34 @@ def patch_department_lab_course(
             detail="Lab course not found in your academic department.",
         )
 
+    if body.code is not None:
+        clean_code = body.code.strip().upper()
+        if clean_code != course.code:
+            exists = db.execute(
+                select(LabCourse).where(func.upper(LabCourse.code) == clean_code, LabCourse.id != course.id)
+            ).scalars().first()
+            if exists:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Lab course code '{clean_code}' already exists.",
+                )
+            course.code = clean_code
 
     if body.name is not None:
         course.name = body.name.strip()
+
+    if body.lab_department_id is not None:
+        target_office = db.get(Department, body.lab_department_id)
+        if not target_office or not target_office.is_active or target_office.applicability != DepartmentApplicability.LAB_WORKSHOP:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assigned lab office must be an active Lab / Workshop department.",
+            )
+        course.lab_department_id = target_office.id
+
     if body.specialization is not None:
         course.specialization = body.specialization.strip() if body.specialization else None
+
     if body.is_active is not None:
         course.is_active = body.is_active
 
@@ -1464,5 +1645,243 @@ def patch_department_lab_course(
     db.add(audit)
     db.commit()
     db.refresh(course)
+
+    return _format_lab_item(course)
+
+
+@router.post(
+    "/lab-workshops",
+    response_model=LabWorkshopOfficeItem,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="create_officer_lab_workshop",
+    summary="Create Lab / Workshop Office",
+    description="Academic officers can create a Lab / Workshop office.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid office name"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-academic officers"},
+        409: {"model": ErrorResponse, "description": "Department name already exists"},
+    },
+)
+def create_officer_lab_workshop(
+    body: CreateLabWorkshopRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_academic_officer),
+) -> LabWorkshopOfficeItem:
+    clean_name = body.name.strip()
+    if len(clean_name) < 3 or len(clean_name) > 80:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Department name must be between 3 and 80 characters.",
+        )
+
+    clash = db.execute(
+        select(Department).where(func.lower(Department.name) == clean_name.lower())
+    ).scalars().first()
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Department '{clean_name}' already exists.",
+        )
+
+    dept = Department(
+        name=clean_name,
+        kind=DepartmentKind.service,
+        applicability=DepartmentApplicability.LAB_WORKSHOP,
+        description=body.description.strip() if body.description else None,
+        is_active=True,
+        created_by_user_id=current_user.id,
+    )
+    db.add(dept)
+    db.flush()
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="LAB_WORKSHOP_OFFICE_CREATED",
+        entity_type="Department",
+        entity_id=dept.id,
+        details={"name": dept.name, "category": "LAB_WORKSHOP"},
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(dept)
+
+    return LabWorkshopOfficeItem(
+        id=dept.id,
+        name=dept.name,
+        description=dept.description,
+        category="LAB_WORKSHOP",
+        label="Lab / Workshop",
+        is_active=dept.is_active,
+        editable=True,
+        subject_count=0,
+        created_by_me=True,
+    )
+
+
+@router.get(
+    "/lab-workshops",
+    response_model=list[LabWorkshopOfficeItem],
+    status_code=status.HTTP_200_OK,
+    operation_id="list_officer_lab_workshops",
+    summary="List Officer Lab / Workshop Offices",
+    description="Lists Lab / Workshop offices linked to officer's subjects or created by them with editable flag.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-academic officers"},
+    },
+)
+def list_officer_lab_workshops(
+    db: SessionDep,
+    current_user: User = Depends(require_academic_officer),
+) -> list[LabWorkshopOfficeItem]:
+    officer_acad_dept_ids = user_academic_department_ids(current_user, db)
+
+    all_courses = db.execute(select(LabCourse)).scalars().all()
+    courses_by_dept: dict[int, list[LabCourse]] = {}
+    for c in all_courses:
+        courses_by_dept.setdefault(c.lab_department_id, []).append(c)
+
+    offices = db.execute(
+        select(Department)
+        .where(Department.applicability == DepartmentApplicability.LAB_WORKSHOP)
+        .order_by(Department.name.asc())
+    ).scalars().all()
+
+    items = []
+    for d in offices:
+        dept_courses = courses_by_dept.get(d.id, [])
+        has_own_subject = any(c.academic_department_id in officer_acad_dept_ids for c in dept_courses)
+        created_by_me = (d.created_by_user_id == current_user.id)
+
+        if not has_own_subject and not created_by_me:
+            continue
+
+        if dept_courses:
+            editable = all(c.academic_department_id in officer_acad_dept_ids for c in dept_courses)
+        else:
+            editable = created_by_me
+
+        items.append(
+            LabWorkshopOfficeItem(
+                id=d.id,
+                name=d.name,
+                description=d.description,
+                category="LAB_WORKSHOP",
+                label="Lab / Workshop",
+                is_active=d.is_active,
+                editable=editable,
+                subject_count=len(dept_courses),
+                created_by_me=created_by_me,
+            )
+        )
+    return items
+
+
+@router.patch(
+    "/lab-workshops/{id}",
+    response_model=LabWorkshopOfficeItem,
+    status_code=status.HTTP_200_OK,
+    operation_id="patch_officer_lab_workshop",
+    summary="Update Lab / Workshop Office",
+    description="Renames, edits description, or deactivates a Lab / Workshop office if owned/editable.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid office name"},
+        403: {"model": ErrorResponse, "description": "Forbidden: office subjects belong to other academic departments or not created by user"},
+        404: {"model": ErrorResponse, "description": "Office not found"},
+        409: {"model": ErrorResponse, "description": "Name clash or open approvals on active requests"},
+    },
+)
+def patch_officer_lab_workshop(
+    id: int,
+    body: UpdateLabWorkshopRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_academic_officer),
+) -> LabWorkshopOfficeItem:
+    office = db.get(Department, id)
+    if not office or office.applicability != DepartmentApplicability.LAB_WORKSHOP:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab / Workshop office not found.")
+
+    officer_acad_dept_ids = user_academic_department_ids(current_user, db)
+    dept_courses = db.execute(select(LabCourse).where(LabCourse.lab_department_id == office.id)).scalars().all()
+
+    if dept_courses:
+        if not all(c.academic_department_id in officer_acad_dept_ids for c in dept_courses):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot edit this lab/workshop office because some of its subjects belong to other academic departments.",
+            )
+    else:
+        if office.created_by_user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You cannot edit this lab/workshop office because you did not create it.",
+            )
+
+    if body.is_active is False and office.is_active:
+        open_approvals_count = db.execute(
+            select(func.count(DepartmentApproval.id))
+            .join(ClearanceRequest, DepartmentApproval.request_id == ClearanceRequest.id)
+            .where(
+                DepartmentApproval.department_id == office.id,
+                ClearanceRequest.status.not_in([
+                    ClearanceStatus.CLEARED,
+                    ClearanceStatus.REFUND_VERIFIED,
+                    ClearanceStatus.CANCELLED,
+                ]),
+            )
+        ).scalar() or 0
+        if open_approvals_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot deactivate office '{office.name}': it has {open_approvals_count} open approvals on active clearance requests.",
+            )
+        office.is_active = False
+    elif body.is_active is True:
+        office.is_active = True
+
+    if body.name is not None:
+        clean_name = body.name.strip()
+        if len(clean_name) < 3 or len(clean_name) > 80:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Department name must be between 3 and 80 characters.",
+            )
+        if clean_name.lower() != office.name.lower():
+            clash = db.execute(
+                select(Department).where(func.lower(Department.name) == clean_name.lower(), Department.id != office.id)
+            ).scalars().first()
+            if clash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Department '{clean_name}' already exists.",
+                )
+        office.name = clean_name
+
+    if body.description is not None:
+        office.description = body.description.strip() if body.description else None
+
+    audit = AuditLog(
+        user_id=current_user.id,
+        action="LAB_WORKSHOP_OFFICE_UPDATED",
+        entity_type="Department",
+        entity_id=office.id,
+        details={"name": office.name, "is_active": office.is_active},
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(office)
+
+    return LabWorkshopOfficeItem(
+        id=office.id,
+        name=office.name,
+        description=office.description,
+        category="LAB_WORKSHOP",
+        label="Lab / Workshop",
+        is_active=office.is_active,
+        editable=True,
+        subject_count=len(dept_courses),
+        created_by_me=(office.created_by_user_id == current_user.id),
+    )
 
     return _format_lab_item(course)

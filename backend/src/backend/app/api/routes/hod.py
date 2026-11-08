@@ -11,7 +11,7 @@ from backend.app.models.clearance import (
     DepartmentApproval,
 )
 from backend.app.models.roster import StudentRoster
-from backend.app.models.university import Department, Programme
+from backend.app.models.university import Department, Programme, DepartmentApplicability
 from backend.app.schemas.workflow import (
     HoDQueueItem,
     HoDRequestDetailResponse,
@@ -43,6 +43,8 @@ def _format_hod_detail(req: ClearanceRequest, db: Session | None = None) -> HoDR
             department_id=a.department_id,
             department_name=a.department.name if a.department else f"Department #{a.department_id}",
             department_kind=a.department.kind.value if a.department else "service",
+            department_category=a.department.category if a.department else None,
+            department_label=a.department.category_label if a.department else None,
             status=a.status,
             remarks=a.remarks,
             previous_remarks=a.previous_remarks,
@@ -64,7 +66,14 @@ def _format_hod_detail(req: ClearanceRequest, db: Session | None = None) -> HoDR
     can_add = []
     if db:
         existing_dept_ids = {a.department_id for a in (req.approvals or [])}
-        all_depts = db.execute(select(Department).order_by(Department.name.asc())).scalars().all()
+        can_depts = db.execute(
+            select(Department)
+            .where(
+                Department.applicability.in_([DepartmentApplicability.LAB_WORKSHOP, DepartmentApplicability.ASSIGNED_ONLY]),
+                Department.is_active == True,
+            )
+            .order_by(Department.name.asc())
+        ).scalars().all()
         can_add = [
             DepartmentResponse(
                 id=d.id,
@@ -72,8 +81,11 @@ def _format_hod_detail(req: ClearanceRequest, db: Session | None = None) -> HoDR
                 kind=d.kind.value,
                 applicability=d.applicability.value,
                 description=d.description,
+                category=d.category,
+                label=d.category_label,
+                is_active=d.is_active,
             )
-            for d in all_depts
+            for d in can_depts
             if d.id not in existing_dept_ids
         ]
 

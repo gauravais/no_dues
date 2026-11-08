@@ -405,15 +405,17 @@ def test_seed_structure_idempotent_and_zero_users(db_session):
     assert res1["faculty_id"] is not None
     assert len(res1["academic_dept_ids"]) == 6
     assert len(res1["service_dept_ids"]) == 10  # 9 ALWAYS + 1 HOSTELLER
-    assert len(res1["assigned_dept_ids"]) == 13  # 9 labs + 3 workshops + 1 others
+    assert len(res1["assigned_dept_ids"]) == 1  # 1 others (additional facility)
 
     # Verify zero users created
     user_count = db_session.query(User).count()
     assert user_count == initial_user_count
 
+    dept_count_after_first = db_session.query(Department).count()
+
     # Verify idempotency: running again succeeds without creating duplicates
     res2 = seed_structure(db_session)
     assert res2["faculty_id"] == res1["faculty_id"]
     assert db_session.query(Faculty).count() == 1
-    assert db_session.query(Department).count() == (6 + 10 + 13)
+    assert db_session.query(Department).count() == dept_count_after_first
     assert db_session.query(User).count() == initial_user_count

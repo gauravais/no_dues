@@ -30,7 +30,7 @@ export function HelpPage() {
       step: '02',
       title: 'Submit Application & Declarations',
       description:
-        'Declare whether you were a hostel resident, select your laboratory and workshop subjects, provide bank details for security deposit return, and submit your clearance application.',
+        'Declare hostel status, select your attended laboratory and workshop subjects (or choose from unlisted labs), optionally declare additional facilities utilized with notes, provide bank refund details, and submit your application.',
     },
     {
       step: '03',

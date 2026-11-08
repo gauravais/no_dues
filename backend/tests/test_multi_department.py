@@ -499,7 +499,7 @@ def test_mixed_officer_service_vs_academic_permissions(client, db_session):
         headers=headers,
     )
     assert res_lab_add_sports.status_code == 400
-    assert "Assigned lab office must be a service department with ASSIGNED_ONLY applicability" in res_lab_add_sports.json()["detail"]
+    assert "LAB_WORKSHOP applicability" in res_lab_add_sports.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -267,20 +267,59 @@ When deployed with `APP_ENV=production`, the application refuses to start and ra
 | :--- | :--- | :--- | :--- |
 | `GET` | `/verify/{certificate_code}` | Public | Public QR verification returning certificate validity without privacy leaks. |
 
-### University Departments (`/departments`)
+### University Departments (`/departments` & `/programmes`)
 | Method | Path | Allowed Roles | Summary / Purpose |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/departments` | Authenticated | Lists all academic and service university departments. |
-| `GET` | `/departments/assigned-only` | Authenticated | Lists all `ASSIGNED_ONLY` service departments (labs, workshops). |
+| `GET` | `/departments` | Authenticated | Lists all active university departments with computed `category` and human-friendly `label`. Filter `?all=true` (admin only) includes inactive. |
+| `GET` | `/departments/assigned-only` | Authenticated | Lists active `ADDITIONAL_FACILITY` departments. |
+| `GET` | `/departments/additional-facilities` | Authenticated | Alias of `/departments/assigned-only`. |
+| `GET` | `/programmes` | Authenticated | Lists active degree programmes with `academic_department_name` and `faculty_name`. |
+
+### Department Officers (`/department`)
+| Method | Path | Allowed Roles | Summary / Purpose |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/department/queue` | `dept_officer` | Paginated queue of clearance tasks across all offices assigned to officer (automatically excludes `CANCELLED` requests). Supports optional query filter `?department_id=X` (returns 404 if not assigned to officer). Response includes `office_counts: list[OfficePendingCount]` (`department_id`, `department_name`, `pending`) across all assigned offices. Queue items include `department_id`, `department_name`, `declared_is_hosteller` (bool, scoped only to Hostel office, else null) and `others_note` (scoped strictly to additional-facility offices on request, else null). |
+| `POST` | `/department/approvals/{id}/decision` | `dept_officer` | Submits approval or rejection decision for an approval belonging to any of officer's assigned departments. |
+| `POST` | `/department/requests/{id}/add-department` | `dept_officer` (acad) | Adds dealing office with mandatory justification. |
+| `POST` | `/department/requests/{id}/cancel` | `dept_officer` (acad) | Cancels clearance request of own student with mandatory reason (forbidden if `CLEARED` or `REFUND_VERIFIED`). |
+| `GET` | `/department/requests/{id}` | `dept_officer` (any assigned) | Clearance dossier for a request. If officer is assigned to student's academic department, returns full dossier (roster, approvals snapshot, audit log, can_add_departments). If officer is assigned strictly to service offices on the request, returns limited dossier scoped across all their assigned offices on the request. |
+| `GET` | `/department/roster/template.csv` | `dept_officer` (acad) | Downloads roster CSV template. |
+| `POST` | `/department/roster/upload` | `dept_officer` (acad) | Uploads student roster for officer's programmes. |
+| `POST` | `/department/roster` | `dept_officer` (acad) | Adds single student to roster. |
+| `GET` | `/department/roster` | `dept_officer` (acad) | Lists roster records scoped to officer's department. |
+| `PATCH` | `/department/roster/{id}` | `dept_officer` (acad) | Updates roster student record (including programme_id when student has no open clearance request). |
+| `GET` | `/department/lab-courses/template.csv`| `dept_officer` (acad) | Downloads lab courses CSV template. |
+| `GET` | `/department/lab-courses` | `dept_officer` (acad) | Lists lab courses scoped to officer's department. |
+| `POST` | `/department/lab-courses` | `dept_officer` (acad) | Creates lab course mapped to an active `LAB_WORKSHOP` office. |
+| `POST` | `/department/lab-courses/upload` | `dept_officer` (acad) | Bulk uploads lab courses from CSV. Supports query params `?dry_run=true` and `?create_missing_offices=true`. Reports `offices_to_create`, `offices_without_officers`, and detects office reassignments. |
+| `PATCH` | `/department/lab-courses/{id}` | `dept_officer` (acad) | Updates lab course metadata (`code`, `name`, `lab_department_id`, `specialization`, `is_active`). |
+| `GET` | `/department/lab-workshops` | `dept_officer` | Lists all active lab / workshop offices, with `editable: bool` flag indicating if current officer created them. |
+| `POST` | `/department/lab-workshops` | `dept_officer` | Creates a new `LAB_WORKSHOP` office. Automatically records `created_by_user_id` and assigns officer to the office. |
+| `PATCH` | `/department/lab-workshops/{id}` | `dept_officer` | Updates an officer-created `LAB_WORKSHOP` office name (forbidden if open clearance requests are attached). |
 
 ### System Administration (`/admin`)
 | Method | Path | Allowed Roles | Summary / Purpose |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/admin/offices` | `admin` | Department staffing dashboard with missing officer/HoD flags. |
+| `GET` | `/admin/offices` | `admin` | Department staffing dashboard with `category`, `label`, `is_active`, and missing officer/HoD flags. |
+| `GET` | `/admin/departments` | `admin` | Department directory with category counts, active requests, active students, and linked lab courses metrics. |
+| `POST` | `/admin/departments` | `admin` | Creates department (`name`, `category`, `faculty_id`). |
+| `PATCH` | `/admin/departments/{id}` | `admin` | Updates department name, category, or active status (guarded against open clearance requests; deactivating core office requires `confirm=true`). |
+| `DELETE` | `/admin/departments/{id}` | `admin` | Deletes unreferenced department (returns 409 "Deactivate it instead" if referenced by approvals, roster, lab courses, or staff). |
+| `POST` | `/admin/departments/bulk-category` | `admin` | Bulk reassigns department categories (`department_ids: list[int]`, `target_category`). Guarded against open requests. |
+| `GET` | `/admin/faculties` | `admin` | Lists faculties with department counts. |
+| `POST` | `/admin/faculties` | `admin` | Creates faculty (`name`, `short_code`). |
+| `PATCH` | `/admin/faculties/{id}` | `admin` | Updates faculty (`name`, `short_code`). |
+| `GET` | `/admin/academic-departments` | `admin` | Lists academic departments with programme counts. |
+| `POST` | `/admin/academic-departments` | `admin` | Creates academic department under a faculty. |
+| `PATCH` | `/admin/academic-departments/{id}` | `admin` | Updates academic department (`name`, `faculty_id`, `is_active`). Guarded against active students / open requests. |
+| `GET` | `/admin/programmes` | `admin` | Lists degree programmes. |
+| `POST` | `/admin/programmes` | `admin` | Creates programme (`name`, `academic_department_id`). |
+| `PATCH` | `/admin/programmes/{id}` | `admin` | Updates programme (`name`, `academic_department_id`, `is_active`). Guarded against active students / open requests. |
 | `POST` | `/admin/users/bulk-upload` | `admin` | Bulk provisions staff accounts from CSV. Supports pipe-separated `departments` column (e.g. `"Sports | Library"`). |
 | `GET` | `/admin/users` | `admin` | Paginated staff accounts directory. Items include `departments: list[DepartmentBrief]`. Filter `?department_id=X` finds users assigned via primary or multi-membership. |
 | `POST` | `/admin/users` | `admin` | Provisions single staff account with `department_ids: list[int]`. Enforces $\ge 1$ department for officers and academic-only for HoD. |
 | `GET` | `/admin/users/{id}` | `admin` | Retrieves full user details including primary department and `departments` membership list. |
+| `PATCH` | `/admin/users/{id}` | `admin` | Updates staff name or email. Requires `unlink_google=true` if email changes on a Google-linked account. |
 | `POST` | `/admin/users/{id}/departments` | `admin` | Adds department membership to user (`{"department_id": int}`). Enforces academic-only for HoD accounts. Audited. |
 | `DELETE` | `/admin/users/{id}/departments/{department_id}` | `admin` | Removes department membership from user. Refuses removing last department with 409 (`"Deactivate the user instead"`). Promotes remaining department to primary if primary is removed. Audited. |
 | `POST` | `/admin/users/{id}/reset-password` | `admin` | Generates new one-time temporary password (sets `must_change_password=True`). |
@@ -292,6 +331,7 @@ When deployed with `APP_ENV=production`, the application refuses to start and ra
 | `PUT` | `/admin/roster/{id}/assigned-departments` | `admin` | Updates assigned departments for a student. |
 | `GET` | `/admin/lab-courses` | `admin` | Global lab catalog fallback. |
 | `POST` | `/admin/lab-courses` | `admin` | Global lab course creation fallback. |
+| `POST` | `/admin/lab-courses/upload` | `admin` | Global lab courses CSV upload with `dry_run` and `create_missing_offices`. |
 | `PATCH` | `/admin/lab-courses/{id}` | `admin` | Global lab course update fallback. |
 
 ---

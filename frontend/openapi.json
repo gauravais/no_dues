@@ -2364,15 +2364,46 @@
         "summary": "Upload Lab Courses CSV",
         "description": "Bulk uploads lab courses for the officer's academic department from CSV.",
         "operationId": "upload_department_lab_courses_csv",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Simulate upload without persisting changes",
+              "default": false,
+              "title": "Dry Run"
+            },
+            "description": "Simulate upload without persisting changes"
+          },
+          {
+            "name": "create_missing_offices",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Create missing Lab/Workshop offices automatically",
+              "default": false,
+              "title": "Create Missing Offices"
+            },
+            "description": "Create missing Lab/Workshop offices automatically"
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "multipart/form-data": {
               "schema": {
                 "$ref": "#/components/schemas/Body_upload_department_lab_courses_csv"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -2415,12 +2446,7 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "OAuth2PasswordBearer": []
-          }
-        ]
+        }
       }
     },
     "/department/lab-courses/{id}": {
@@ -2429,7 +2455,7 @@
           "Department Officer"
         ],
         "summary": "Update Lab Course",
-        "description": "Updates a lab course's name, specialization, or active status.",
+        "description": "Updates a lab course's code, name, lab department, specialization, or active status.",
         "operationId": "patch_department_lab_course",
         "security": [
           {
@@ -2468,6 +2494,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid lab department or applicability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Forbidden for service department officers",
             "content": {
@@ -2480,6 +2516,230 @@
           },
           "404": {
             "description": "Lab course not found in your academic department",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lab course code already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/department/lab-workshops": {
+      "get": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "List Officer Lab / Workshop Offices",
+        "description": "Lists Lab / Workshop offices linked to officer's subjects or created by them with editable flag.",
+        "operationId": "list_officer_lab_workshops",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LabWorkshopOfficeItem"
+                  },
+                  "type": "array",
+                  "title": "Response List Officer Lab Workshops"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-academic officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Create Lab / Workshop Office",
+        "description": "Academic officers can create a Lab / Workshop office.",
+        "operationId": "create_officer_lab_workshop",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLabWorkshopRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabWorkshopOfficeItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid office name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-academic officers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/department/lab-workshops/{id}": {
+      "patch": {
+        "tags": [
+          "Department Officer"
+        ],
+        "summary": "Update Lab / Workshop Office",
+        "description": "Renames, edits description, or deactivates a Lab / Workshop office if owned/editable.",
+        "operationId": "patch_officer_lab_workshop",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLabWorkshopRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabWorkshopOfficeItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid office name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden: office subjects belong to other academic departments or not created by user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Office not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name clash or open approvals on active requests",
             "content": {
               "application/json": {
                 "schema": {
@@ -3983,6 +4243,102 @@
             }
           }
         }
+      },
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Staff User Details",
+        "description": "Updates a staff user's full_name and email. Changing email when google_sub is bound requires unlink_google=true. Audited.",
+        "operationId": "patch_admin_user",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUpdateUserRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminUserDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email domain or user is student",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "User not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email clash or Google account bound without unlink_google",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/admin/users/{id}/departments": {
@@ -4594,7 +4950,7 @@
           "Admin"
         ],
         "summary": "Update Lab Course (Admin)",
-        "description": "Updates a lab course's name, specialization, or active status.",
+        "description": "Updates a lab course's code, name, lab department, specialization, or active status.",
         "operationId": "admin_patch_lab_course",
         "security": [
           {
@@ -4633,6 +4989,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid lab department or applicability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Forbidden for non-admin roles",
             "content": {
@@ -4645,6 +5011,16 @@
           },
           "404": {
             "description": "Lab course not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Lab course code already exists",
             "content": {
               "application/json": {
                 "schema": {
@@ -4754,13 +5130,1191 @@
         }
       }
     },
+    "/admin/lab-courses/upload": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Upload Lab Courses CSV (Admin)",
+        "description": "Bulk uploads lab courses for any academic department with dry-run and auto-office creation support.",
+        "operationId": "admin_upload_lab_courses_csv",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Simulate upload without persisting changes",
+              "default": false,
+              "title": "Dry Run"
+            },
+            "description": "Simulate upload without persisting changes"
+          },
+          {
+            "name": "create_missing_offices",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Create missing Lab/Workshop offices automatically",
+              "default": false,
+              "title": "Create Missing Offices"
+            },
+            "description": "Create missing Lab/Workshop offices automatically"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_admin_upload_lab_courses_csv"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabCourseUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid CSV file structure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/departments": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List Departments with Management Metrics",
+        "description": "Lists university departments with category, label, active status, staffing and approval metrics.",
+        "operationId": "admin_list_departments",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by category: ACADEMIC, UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY",
+              "title": "Category"
+            },
+            "description": "Filter by category: ACADEMIC, UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY"
+          },
+          {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by is_active status",
+              "title": "Is Active"
+            },
+            "description": "Filter by is_active status"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search by department name",
+              "title": "Search"
+            },
+            "description": "Search by department name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDepartmentListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create University Service Department",
+        "description": "Creates a service department under one of: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY.",
+        "operationId": "admin_create_department",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCreateDepartmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDepartmentListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid category or name length",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/departments/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Department Details and Active Status",
+        "description": "Updates department name, description, category, or active status with safety guards against open clearance approvals.",
+        "operationId": "admin_patch_department",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          },
+          {
+            "name": "confirm",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Confirmation required when deactivating core university offices",
+              "default": false,
+              "title": "Confirm"
+            },
+            "description": "Confirmation required when deactivating core university offices"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUpdateDepartmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminDepartmentListItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or missing confirmation for core office deactivation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Department not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Open approvals on active requests or name clash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Delete Department",
+        "description": "Deletes a department only if no records (approvals, lab courses, memberships, roster overrides, programmes) refer to it.",
+        "operationId": "admin_delete_department",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Admin Delete Department"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Department not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department has referencing records; deactivate it instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/departments/bulk-category": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Bulk Update Department Categories",
+        "description": "Bulk updates categories for multiple departments. Refused with 409 if any department has open clearance approvals.",
+        "operationId": "admin_bulk_department_category",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkCategoryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkCategoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid category",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department has open approvals on active requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/faculties": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List University Faculties",
+        "description": "Returns all faculties with department counts.",
+        "operationId": "admin_list_faculties",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FacultyResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Admin List Faculties"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create Faculty",
+        "description": "Creates a new university faculty.",
+        "operationId": "admin_create_faculty",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacultyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacultyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Faculty name or short code already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/faculties/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Faculty",
+        "description": "Updates faculty name or short code.",
+        "operationId": "admin_patch_faculty",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FacultyUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FacultyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Faculty not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name or short code conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/academic-departments": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List Academic Departments",
+        "description": "Returns all academic departments with programme and student metrics.",
+        "operationId": "admin_list_academic_departments",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AcademicDepartmentResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Admin List Academic Departments"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create Academic Department",
+        "description": "Creates a new academic department bound to a faculty.",
+        "operationId": "admin_create_academic_department",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicDepartmentCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcademicDepartmentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or faculty not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Department name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/academic-departments/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Academic Department",
+        "description": "Updates academic department name, faculty, or active status with safety guards against active students.",
+        "operationId": "admin_patch_academic_department",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcademicDepartmentUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcademicDepartmentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or faculty not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Department not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Deactivation refused while students or open requests exist, or name clash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/programmes": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List Programmes (Admin)",
+        "description": "Returns all programmes with academic department, faculty, and student counts.",
+        "operationId": "admin_list_programmes",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProgrammeResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Admin List Programmes"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Create Programme",
+        "description": "Creates a new academic programme under an academic department.",
+        "operationId": "admin_create_programme",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgrammeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgrammeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or department not academic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Programme name already exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/admin/programmes/{id}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update Programme",
+        "description": "Updates programme name, academic department, or active status with safety guards against active students.",
+        "operationId": "admin_patch_programme",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgrammeUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgrammeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or department not academic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden for non-admin roles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Programme not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Moving programme with roster entries refused, or deactivating with active students",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/departments": {
       "get": {
         "tags": [
           "Departments"
         ],
         "summary": "List University Departments",
-        "description": "Returns all active university departments (academic and service). Accessible to all authenticated users.",
+        "description": "Returns all university departments (academic and service) with category, label and active status.",
         "operationId": "list_departments",
         "responses": {
           "200": {
@@ -4800,8 +6354,8 @@
         "tags": [
           "Departments"
         ],
-        "summary": "List ASSIGNED_ONLY Service Departments",
-        "description": "Returns all service departments that require specific assignment (labs, workshops, specialized centers) with description.",
+        "summary": "List Active Additional Facilities",
+        "description": "Returns all active additional facility service departments with description.",
         "operationId": "list_assigned_only_departments",
         "responses": {
           "200": {
@@ -4814,6 +6368,88 @@
                   },
                   "type": "array",
                   "title": "Response List Assigned Only Departments"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/departments/additional-facilities": {
+      "get": {
+        "tags": [
+          "Departments"
+        ],
+        "summary": "List Active Additional Facilities (Alias)",
+        "description": "Alias endpoint for list_assigned_only_departments.",
+        "operationId": "list_additional_facilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssignedOnlyDepartmentItem"
+                  },
+                  "type": "array",
+                  "title": "Response List Additional Facilities"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/programmes": {
+      "get": {
+        "tags": [
+          "Programmes"
+        ],
+        "summary": "List Academic Programmes",
+        "description": "Returns all academic programmes including faculty and academic department names.",
+        "operationId": "list_programmes",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProgrammeResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Programmes"
                 }
               }
             }
@@ -4893,6 +6529,140 @@
   },
   "components": {
     "schemas": {
+      "AcademicDepartmentCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 3,
+            "title": "Name",
+            "examples": [
+              "Skill Department of CS/IT"
+            ]
+          },
+          "faculty_id": {
+            "type": "integer",
+            "title": "Faculty Id",
+            "examples": [
+              1
+            ]
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "faculty_id"
+        ],
+        "title": "AcademicDepartmentCreate",
+        "description": "Payload to create an academic department."
+      },
+      "AcademicDepartmentResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "faculty_id": {
+            "type": "integer",
+            "title": "Faculty Id"
+          },
+          "faculty_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty Name"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "ACADEMIC"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": "Academic department"
+          },
+          "programme_count": {
+            "type": "integer",
+            "title": "Programme Count",
+            "default": 0
+          },
+          "student_count": {
+            "type": "integer",
+            "title": "Student Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "faculty_id"
+        ],
+        "title": "AcademicDepartmentResponse",
+        "description": "Academic department representation."
+      },
+      "AcademicDepartmentUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "faculty_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty Id"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "AcademicDepartmentUpdate",
+        "description": "Payload to update an academic department."
+      },
       "AddDepartmentRequest": {
         "properties": {
           "department_id": {
@@ -4957,6 +6727,48 @@
         ],
         "title": "AddUserDepartmentRequest",
         "description": "Payload to add a department membership to an existing user."
+      },
+      "AdminCreateDepartmentRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "title": "Name",
+            "description": "Department name",
+            "examples": [
+              "Robotics Lab"
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Department description"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "Category: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY",
+            "examples": [
+              "LAB_WORKSHOP"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "category"
+        ],
+        "title": "AdminCreateDepartmentRequest",
+        "description": "Payload to create a service department."
       },
       "AdminCreateUserRequest": {
         "properties": {
@@ -5041,6 +6853,108 @@
         "title": "AdminCreateUserRequest",
         "description": "Payload for administrator to provision staff, officer or HoD user."
       },
+      "AdminDepartmentListItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "applicability": {
+            "type": "string",
+            "title": "Applicability"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "officer_count": {
+            "type": "integer",
+            "title": "Officer Count",
+            "default": 0
+          },
+          "subject_count": {
+            "type": "integer",
+            "title": "Subject Count",
+            "default": 0
+          },
+          "open_approvals_count": {
+            "type": "integer",
+            "title": "Open Approvals Count",
+            "default": 0
+          },
+          "missing_officer": {
+            "type": "boolean",
+            "title": "Missing Officer",
+            "default": false
+          },
+          "missing_hod": {
+            "type": "boolean",
+            "title": "Missing Hod",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "applicability",
+          "category",
+          "label",
+          "is_active"
+        ],
+        "title": "AdminDepartmentListItem",
+        "description": "Item in admin department management list."
+      },
+      "AdminDepartmentListResponse": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AdminDepartmentListItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "AdminDepartmentListResponse",
+        "description": "List of departments for admin management."
+      },
       "AdminOfficeListResponse": {
         "properties": {
           "total": {
@@ -5081,6 +6995,24 @@
           "applicability": {
             "type": "string",
             "title": "Applicability"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "Computed category",
+            "default": "UNIVERSITY_OFFICE"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "Human-readable category label",
+            "default": "University office"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "description": "Whether department is active",
+            "default": true
           },
           "description": {
             "anyOf": [
@@ -5191,6 +7123,105 @@
         ],
         "title": "AdminResetPasswordResponse",
         "description": "One-time reset temporary password response."
+      },
+      "AdminUpdateDepartmentRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "description": "Category: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "confirm": {
+            "type": "boolean",
+            "title": "Confirm",
+            "description": "Explicit confirmation when deactivating core university offices",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AdminUpdateDepartmentRequest",
+        "description": "Payload to update a department."
+      },
+      "AdminUpdateUserRequest": {
+        "properties": {
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "unlink_google": {
+            "type": "boolean",
+            "title": "Unlink Google",
+            "description": "When true, unlinks bound Google account on email change",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "AdminUpdateUserRequest",
+        "description": "Payload to update staff user's full name and email."
       },
       "AdminUserActiveRequest": {
         "properties": {
@@ -5574,6 +7605,27 @@
               }
             ],
             "title": "Description"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "ADDITIONAL_FACILITY"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": "Additional facility"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "has_active_officer": {
+            "type": "boolean",
+            "title": "Has Active Officer",
+            "description": "Whether department has at least one active dealing officer",
+            "default": true
           }
         },
         "type": "object",
@@ -5728,6 +7780,21 @@
         "title": "BankDetailUpdate",
         "description": "Payload to update student bank details."
       },
+      "Body_admin_upload_lab_courses_csv": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "CSV file with lab courses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_admin_upload_lab_courses_csv"
+      },
       "Body_bulk_upload_admin_users": {
         "properties": {
           "file": {
@@ -5847,6 +7914,49 @@
         ],
         "title": "Body_upload_roster_csv"
       },
+      "BulkCategoryRequest": {
+        "properties": {
+          "department_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Department Ids"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "Target category: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY"
+          }
+        },
+        "type": "object",
+        "required": [
+          "department_ids",
+          "category"
+        ],
+        "title": "BulkCategoryRequest",
+        "description": "Payload to bulk-update category of departments."
+      },
+      "BulkCategoryResponse": {
+        "properties": {
+          "updated_count": {
+            "type": "integer",
+            "title": "Updated Count"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "updated_count",
+          "detail"
+        ],
+        "title": "BulkCategoryResponse",
+        "description": "Response for bulk category update."
+      },
       "CancelResponse": {
         "properties": {
           "detail": {
@@ -5906,6 +8016,39 @@
           "CANCELLED"
         ],
         "title": "ClearanceStatus"
+      },
+      "CreateLabWorkshopRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 3,
+            "title": "Name",
+            "description": "Name of the Lab/Workshop office",
+            "examples": [
+              "Advanced Computing Lab"
+            ]
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "Optional description of the facility"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateLabWorkshopRequest",
+        "description": "Payload for an academic officer to create a Lab / Workshop office."
       },
       "CurrentRequestResponse": {
         "properties": {
@@ -6137,6 +8280,36 @@
               "service"
             ]
           },
+          "department_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Category",
+            "description": "Department computed category",
+            "examples": [
+              "UNIVERSITY_OFFICE"
+            ]
+          },
+          "department_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Label",
+            "description": "Department human-readable category label",
+            "examples": [
+              "University office"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/ApprovalStatus",
             "description": "Current approval status",
@@ -6293,6 +8466,42 @@
             "examples": [
               "academic"
             ]
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category",
+            "description": "Computed category",
+            "examples": [
+              "ACADEMIC"
+            ]
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "Human-readable category label",
+            "examples": [
+              "Academic department"
+            ]
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "description": "Whether department is active",
+            "default": true
           }
         },
         "type": "object",
@@ -6541,6 +8750,34 @@
             ],
             "title": "Description",
             "description": "Department description or location"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "Computed category: ACADEMIC, UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY",
+            "examples": [
+              "UNIVERSITY_OFFICE"
+            ]
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "description": "Human-readable category label",
+            "examples": [
+              "University office"
+            ]
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "description": "Whether department is active",
+            "default": true
+          },
+          "has_active_officer": {
+            "type": "boolean",
+            "title": "Has Active Officer",
+            "description": "Whether department has at least one active dealing officer",
+            "default": true
           }
         },
         "type": "object",
@@ -6548,7 +8785,9 @@
           "id",
           "name",
           "kind",
-          "applicability"
+          "applicability",
+          "category",
+          "label"
         ],
         "title": "DepartmentResponse",
         "description": "University department basic metadata."
@@ -6785,6 +9024,18 @@
               }
             ],
             "title": "Address"
+          },
+          "programme_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Programme Id",
+            "description": "New enrolled programme ID (refused if student has open request or programme is not active/not in officer's academic department)"
           }
         },
         "type": "object",
@@ -6808,6 +9059,97 @@
         ],
         "title": "ErrorResponse",
         "description": "Standard API error payload."
+      },
+      "FacultyCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 2,
+            "title": "Name",
+            "examples": [
+              "Skill Faculty of Engineering and Technology"
+            ]
+          },
+          "short_code": {
+            "type": "string",
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Short Code",
+            "examples": [
+              "SFET"
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "short_code"
+        ],
+        "title": "FacultyCreate",
+        "description": "Payload to create a faculty."
+      },
+      "FacultyResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "short_code": {
+            "type": "string",
+            "title": "Short Code"
+          },
+          "department_count": {
+            "type": "integer",
+            "title": "Department Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "short_code"
+        ],
+        "title": "FacultyResponse",
+        "description": "Faculty structure representation."
+      },
+      "FacultyUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 2
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "short_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Code"
+          }
+        },
+        "type": "object",
+        "title": "FacultyUpdate",
+        "description": "Payload to update a faculty."
       },
       "GoogleAuthRequest": {
         "properties": {
@@ -7135,7 +9477,7 @@
           "lab_department_id": {
             "type": "integer",
             "title": "Lab Department Id",
-            "description": "ID of ASSIGNED_ONLY service department providing the facility",
+            "description": "ID of active LAB_WORKSHOP service department providing the facility",
             "examples": [
               5
             ]
@@ -7288,6 +9630,22 @@
       },
       "LabCoursePatch": {
         "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 50,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code",
+            "examples": [
+              "CSE-L201"
+            ]
+          },
           "name": {
             "anyOf": [
               {
@@ -7300,6 +9658,21 @@
               }
             ],
             "title": "Name"
+          },
+          "lab_department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lab Department Id",
+            "description": "ID of active LAB_WORKSHOP service department",
+            "examples": [
+              5
+            ]
           },
           "specialization": {
             "anyOf": [
@@ -7353,6 +9726,27 @@
             },
             "type": "array",
             "title": "Rows"
+          },
+          "offices_to_create": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Offices To Create",
+            "description": "Offices that would be/were created"
+          },
+          "offices_without_officers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Offices Without Officers",
+            "description": "Referenced offices with no active officer"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "title": "Dry Run",
+            "default": false
           }
         },
         "type": "object",
@@ -7401,6 +9795,69 @@
         ],
         "title": "LabCourseUploadRowReport",
         "description": "Result per processed CSV row in lab course upload."
+      },
+      "LabWorkshopOfficeItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "LAB_WORKSHOP"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": "Lab / Workshop"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "editable": {
+            "type": "boolean",
+            "title": "Editable",
+            "description": "Whether current officer can edit/deactivate this office"
+          },
+          "subject_count": {
+            "type": "integer",
+            "title": "Subject Count",
+            "description": "Number of lab courses hosted by this office",
+            "default": 0
+          },
+          "created_by_me": {
+            "type": "boolean",
+            "title": "Created By Me",
+            "description": "Whether current officer created this office",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_active",
+          "editable"
+        ],
+        "title": "LabWorkshopOfficeItem",
+        "description": "Lab / Workshop office with officer ownership and editable flag."
       },
       "LiveHealthResponse": {
         "properties": {
@@ -7526,6 +9983,147 @@
         ],
         "title": "OfficePendingCount",
         "description": "Pending count for a single office belonging to an officer."
+      },
+      "ProgrammeCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 3,
+            "title": "Name",
+            "examples": [
+              "B.Tech Computer Science and Engineering"
+            ]
+          },
+          "academic_department_id": {
+            "type": "integer",
+            "title": "Academic Department Id",
+            "examples": [
+              1
+            ]
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "academic_department_id"
+        ],
+        "title": "ProgrammeCreate",
+        "description": "Payload to create a programme."
+      },
+      "ProgrammeResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "academic_department_id": {
+            "type": "integer",
+            "title": "Academic Department Id"
+          },
+          "academic_department_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Department Name"
+          },
+          "faculty_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty Id"
+          },
+          "faculty_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faculty Name"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "student_count": {
+            "type": "integer",
+            "title": "Student Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "academic_department_id"
+        ],
+        "title": "ProgrammeResponse",
+        "description": "Academic programme representation."
+      },
+      "ProgrammeUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 255,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "academic_department_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Academic Department Id"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "ProgrammeUpdate",
+        "description": "Payload to update a programme."
       },
       "PublicVerificationResponse": {
         "properties": {
@@ -8489,6 +11087,26 @@
               ]
             ]
           },
+          "lab_workshop_department_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lab Workshop Department Ids",
+            "description": "Directly declared active Lab / Workshop department IDs",
+            "examples": [
+              [
+                5
+              ]
+            ]
+          },
           "other_office_ids": {
             "anyOf": [
               {
@@ -8571,6 +11189,16 @@
               }
             ],
             "title": "Specialization"
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "LAB_WORKSHOP"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": "Lab / Workshop"
           }
         },
         "type": "object",
@@ -8599,6 +11227,14 @@
             },
             "type": "array",
             "title": "Assigned Only Departments"
+          },
+          "direct_offices": {
+            "items": {
+              "$ref": "#/components/schemas/DepartmentResponse"
+            },
+            "type": "array",
+            "title": "Direct Offices",
+            "description": "Direct active Lab / Workshop offices for fallback"
           }
         },
         "type": "object",
@@ -8638,6 +11274,52 @@
         ],
         "title": "TokenResponse",
         "description": "OAuth2 Bearer token response."
+      },
+      "UpdateLabWorkshopRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name",
+            "description": "New name of the office"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description",
+            "description": "New description"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active",
+            "description": "Deactivate or reactivate the office"
+          }
+        },
+        "type": "object",
+        "title": "UpdateLabWorkshopRequest",
+        "description": "Payload for an academic officer to update their Lab / Workshop office."
       },
       "UserMeResponse": {
         "properties": {

@@ -166,6 +166,9 @@ class AdminOfficeSummary(BaseModel):
     name: str
     kind: str = Field(..., description="academic | service")
     applicability: str
+    category: str = Field("UNIVERSITY_OFFICE", description="Computed category")
+    label: str = Field("University office", description="Human-readable category label")
+    is_active: bool = Field(True, description="Whether department is active")
     description: str | None = None
     active_officers: list[AdminOfficeUserSummary]
     hod: AdminOfficeUserSummary | None = None
@@ -197,4 +200,141 @@ class AdminUserBulkUploadResponse(BaseModel):
     created_count: int
     rejected_count: int
     rows: list[AdminUserBulkUploadDetail]
+
+
+class AdminDepartmentListItem(BaseModel):
+    """Item in admin department management list."""
+    id: int
+    name: str
+    kind: str
+    applicability: str
+    description: str | None = None
+    category: str
+    label: str
+    is_active: bool
+    officer_count: int = 0
+    subject_count: int = 0
+    open_approvals_count: int = 0
+    missing_officer: bool = False
+    missing_hod: bool = False
+
+
+class AdminDepartmentListResponse(BaseModel):
+    """List of departments for admin management."""
+    total: int
+    items: list[AdminDepartmentListItem]
+
+
+class AdminCreateDepartmentRequest(BaseModel):
+    """Payload to create a service department."""
+    name: str = Field(..., min_length=3, max_length=80, description="Department name", examples=["Robotics Lab"])
+    description: str | None = Field(None, max_length=500, description="Department description")
+    category: str = Field(
+        ...,
+        description="Category: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY",
+        examples=["LAB_WORKSHOP"],
+    )
+
+
+class AdminUpdateDepartmentRequest(BaseModel):
+    """Payload to update a department."""
+    name: str | None = Field(None, min_length=3, max_length=80)
+    description: str | None = Field(None, max_length=500)
+    category: str | None = Field(None, description="Category: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY")
+    is_active: bool | None = None
+    confirm: bool = Field(False, description="Explicit confirmation when deactivating core university offices")
+
+
+class BulkCategoryRequest(BaseModel):
+    """Payload to bulk-update category of departments."""
+    department_ids: list[int] = Field(..., min_length=1)
+    category: str = Field(..., description="Target category: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY")
+
+
+class BulkCategoryResponse(BaseModel):
+    """Response for bulk category update."""
+    updated_count: int
+    detail: str
+
+
+class AdminUpdateUserRequest(BaseModel):
+    """Payload to update staff user's full name and email."""
+    full_name: str | None = Field(None, min_length=1, max_length=255)
+    email: EmailStr | None = None
+    unlink_google: bool = Field(False, description="When true, unlinks bound Google account on email change")
+
+
+# Academic Structure Schemas
+class FacultyResponse(BaseModel):
+    """Faculty structure representation."""
+    id: int
+    name: str
+    short_code: str
+    department_count: int = 0
+
+
+class FacultyCreate(BaseModel):
+    """Payload to create a faculty."""
+    name: str = Field(..., min_length=2, max_length=255, examples=["Skill Faculty of Engineering and Technology"])
+    short_code: str = Field(..., min_length=1, max_length=20, examples=["SFET"])
+
+
+class FacultyUpdate(BaseModel):
+    """Payload to update a faculty."""
+    name: str | None = Field(None, min_length=2, max_length=255)
+    short_code: str | None = Field(None, min_length=1, max_length=20)
+
+
+class AcademicDepartmentResponse(BaseModel):
+    """Academic department representation."""
+    id: int
+    name: str
+    faculty_id: int
+    faculty_name: str | None = None
+    is_active: bool = True
+    category: str = "ACADEMIC"
+    label: str = "Academic department"
+    programme_count: int = 0
+    student_count: int = 0
+
+
+class AcademicDepartmentCreate(BaseModel):
+    """Payload to create an academic department."""
+    name: str = Field(..., min_length=3, max_length=255, examples=["Skill Department of CS/IT"])
+    faculty_id: int = Field(..., examples=[1])
+    is_active: bool = True
+
+
+class AcademicDepartmentUpdate(BaseModel):
+    """Payload to update an academic department."""
+    name: str | None = Field(None, min_length=3, max_length=255)
+    faculty_id: int | None = None
+    is_active: bool | None = None
+
+
+class ProgrammeResponse(BaseModel):
+    """Academic programme representation."""
+    id: int
+    name: str
+    academic_department_id: int
+    academic_department_name: str | None = None
+    faculty_id: int | None = None
+    faculty_name: str | None = None
+    is_active: bool = True
+    student_count: int = 0
+
+
+class ProgrammeCreate(BaseModel):
+    """Payload to create a programme."""
+    name: str = Field(..., min_length=3, max_length=255, examples=["B.Tech Computer Science and Engineering"])
+    academic_department_id: int = Field(..., examples=[1])
+    is_active: bool = True
+
+
+class ProgrammeUpdate(BaseModel):
+    """Payload to update a programme."""
+    name: str | None = Field(None, min_length=3, max_length=255)
+    academic_department_id: int | None = None
+    is_active: bool | None = None
+
 

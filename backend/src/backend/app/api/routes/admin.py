@@ -16,7 +16,8 @@ from backend.app.core.config import settings
 from backend.app.core.security import hash_password, normalize_email
 from backend.app.models.user import User, UserRole, UserDepartment
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
-from backend.app.models.university import Department, Programme, DepartmentKind, DepartmentApplicability
+from backend.app.models.university import Faculty, Department, Programme, DepartmentKind, DepartmentApplicability
+from backend.app.models.clearance import ClearanceRequest, ClearanceStatus, DepartmentApproval, ApprovalStatus
 from backend.app.models.lab_course import LabCourse
 from backend.app.models.audit import AuditLog
 from backend.app.schemas.common import ErrorResponse, DepartmentBrief
@@ -39,6 +40,22 @@ from backend.app.schemas.admin import (
     AdminOfficeListResponse,
     AdminUserBulkUploadDetail,
     AdminUserBulkUploadResponse,
+    AdminDepartmentListItem,
+    AdminDepartmentListResponse,
+    AdminCreateDepartmentRequest,
+    AdminUpdateDepartmentRequest,
+    BulkCategoryRequest,
+    BulkCategoryResponse,
+    AdminUpdateUserRequest,
+    FacultyResponse,
+    FacultyCreate,
+    FacultyUpdate,
+    AcademicDepartmentResponse,
+    AcademicDepartmentCreate,
+    AcademicDepartmentUpdate,
+    ProgrammeResponse,
+    ProgrammeCreate,
+    ProgrammeUpdate,
 )
 from backend.app.schemas.department import (
     LabCourseListResponse,
@@ -840,6 +857,108 @@ def get_admin_user_detail(
     )
 
 
+@router.patch(
+    "/users/{id}",
+    response_model=AdminUserDetailResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="patch_admin_user",
+    summary="Update Staff User Details",
+    description="Updates a staff user's full_name and email. Changing email when google_sub is bound requires unlink_google=true. Audited.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid email domain or user is student"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "User not found"},
+        409: {"model": ErrorResponse, "description": "Email clash or Google account bound without unlink_google"},
+    },
+)
+def patch_admin_user(
+    id: int,
+    body: AdminUpdateUserRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AdminUserDetailResponse:
+    user = db.get(User, id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    if user.role == UserRole.student:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only staff user accounts can be edited via this endpoint.")
+
+    old_email = user.email
+    old_name = user.full_name
+    old_google_sub = user.google_sub
+
+    if body.email is not None:
+        new_email = normalize_email(str(body.email))
+        if new_email != user.email:
+            domain = new_email.split("@")[1].lower() if "@" in new_email else ""
+            if domain not in settings.allowed_email_domain_list:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Email domain '{domain}' is not allowed for university staff.",
+                )
+
+            if user.google_sub and not body.unlink_google:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="User has a linked Google account. Pass unlink_google=true to proceed with email change.",
+                )
+
+            clash = db.execute(
+                select(User).where(func.lower(User.email) == new_email, User.id != user.id)
+            ).scalars().first()
+            if clash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Email '{new_email}' is already taken.",
+                )
+
+            if user.google_sub and body.unlink_google:
+                user.google_sub = None
+
+            user.email = new_email
+
+    if body.full_name is not None:
+        user.full_name = body.full_name.strip()
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_STAFF_USER_UPDATED",
+        entity_type="users",
+        entity_id=user.id,
+        details={
+            "old_email": old_email,
+            "new_email": user.email,
+            "old_name": old_name,
+            "new_name": user.full_name,
+            "unlinked_google": (old_google_sub is not None and user.google_sub is None),
+        },
+    )
+    db.commit()
+    db.refresh(user)
+
+    depts = get_user_departments(user, db)
+    dept_briefs = [
+        DepartmentBrief(id=d.id, name=d.name, kind=d.kind.value, category=d.category, label=d.category_label, is_active=d.is_active)
+        for d in depts
+    ]
+    primary_dept = db.get(Department, user.department_id) if user.department_id else None
+
+    return AdminUserDetailResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        department_id=user.department_id,
+        department_name=primary_dept.name if primary_dept else None,
+        departments=dept_briefs,
+        is_active=user.is_active,
+        created_at=user.created_at,
+        last_login_at=user.last_login_at,
+    )
+
+
 @router.post(
     "/users/{id}/departments",
     response_model=AdminUserDetailResponse,
@@ -1198,6 +1317,9 @@ def list_admin_offices(
                 name=d.name,
                 kind=d.kind.value,
                 applicability=d.applicability.value,
+                category=d.category,
+                label=d.category_label,
+                is_active=d.is_active,
                 description=d.description,
                 active_officers=active_officers,
                 hod=hod_user,
@@ -1469,7 +1591,7 @@ def admin_get_lab_courses_template(
 ) -> Response:
     csv_content = (
         "code,name,academic_department,lab_office,specialization\r\n"
-        "CSE-L101,Advanced Programming Lab,Skill Department of CS/IT,Lab-1,Computer Engineering\r\n"
+        "CSE-L101,Advanced Programming Lab,Skill Department of CS/IT,Computing Laboratory,Computer Engineering\r\n"
     )
     return Response(
         content=csv_content,
@@ -1560,10 +1682,10 @@ def admin_create_lab_course(
         )
 
     lab_dept = db.get(Department, body.lab_department_id)
-    if not lab_dept or lab_dept.applicability != DepartmentApplicability.ASSIGNED_ONLY:
+    if not lab_dept or not lab_dept.is_active or lab_dept.applicability != DepartmentApplicability.LAB_WORKSHOP:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Assigned lab office must be a service department with ASSIGNED_ONLY applicability.",
+            detail="Assigned lab office must be an active service department with LAB_WORKSHOP applicability.",
         )
 
     course = LabCourse(
@@ -1597,10 +1719,12 @@ def admin_create_lab_course(
     status_code=status.HTTP_200_OK,
     operation_id="admin_patch_lab_course",
     summary="Update Lab Course (Admin)",
-    description="Updates a lab course's name, specialization, or active status.",
+    description="Updates a lab course's code, name, lab department, specialization, or active status.",
     responses={
+        400: {"model": ErrorResponse, "description": "Invalid lab department or applicability"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
         404: {"model": ErrorResponse, "description": "Lab course not found"},
+        409: {"model": ErrorResponse, "description": "Lab course code already exists"},
     },
 )
 def admin_patch_lab_course(
@@ -1618,10 +1742,34 @@ def admin_patch_lab_course(
     if not course:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Lab course not found.")
 
+    if body.code is not None:
+        clean_code = body.code.strip().upper()
+        if clean_code != course.code:
+            exists = db.execute(
+                select(LabCourse).where(func.upper(LabCourse.code) == clean_code, LabCourse.id != course.id)
+            ).scalars().first()
+            if exists:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Lab course code '{clean_code}' already exists.",
+                )
+            course.code = clean_code
+
     if body.name is not None:
         course.name = body.name.strip()
+
+    if body.lab_department_id is not None:
+        target_office = db.get(Department, body.lab_department_id)
+        if not target_office or not target_office.is_active or target_office.applicability != DepartmentApplicability.LAB_WORKSHOP:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assigned lab office must be an active Lab / Workshop department.",
+            )
+        course.lab_department_id = target_office.id
+
     if body.specialization is not None:
         course.specialization = body.specialization.strip() if body.specialization else None
+
     if body.is_active is not None:
         course.is_active = body.is_active
 
@@ -1671,5 +1819,1311 @@ def admin_cancel_request(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=e.message)
     except WorkflowForbiddenError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=e.message)
+
+
+# ---------------------------------------------------------------------------
+# ADMIN LAB COURSES UPLOAD
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/lab-courses/upload",
+    response_model=LabCourseUploadResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_upload_lab_courses_csv",
+    summary="Upload Lab Courses CSV (Admin)",
+    description="Bulk uploads lab courses for any academic department with dry-run and auto-office creation support.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid CSV file structure"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+async def admin_upload_lab_courses_csv(
+    db: SessionDep,
+    file: UploadFile = File(..., description="CSV file with lab courses"),
+    dry_run: bool = Query(False, description="Simulate upload without persisting changes"),
+    create_missing_offices: bool = Query(False, description="Create missing Lab/Workshop offices automatically"),
+    current_user: User = Depends(require_admin),
+) -> LabCourseUploadResponse:
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = content.decode("latin-1")
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to decode CSV file as text")
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded CSV file is empty or missing headers")
+
+    fieldnames_map = {f.strip().lower(): f for f in reader.fieldnames if f}
+    required_cols = ["code", "name", "lab_office"]
+    for col in required_cols:
+        if col not in fieldnames_map:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing required CSV column '{col}'. Required: {', '.join(required_cols)}",
+            )
+
+    acad_depts = db.execute(
+        select(Department).where(Department.kind == DepartmentKind.academic)
+    ).scalars().all()
+    acad_by_name = {d.name.strip().lower(): d for d in acad_depts}
+    acad_by_id = {d.id: d for d in acad_depts}
+    default_acad_id = acad_depts[0].id if acad_depts else None
+
+    row_reports: list[LabCourseUploadRowReport] = []
+    created_count = 0
+    updated_count = 0
+    rejected_count = 0
+    offices_to_create: list[str] = []
+    offices_without_officers: list[str] = []
+
+    for idx, row in enumerate(reader, start=1):
+        code = (row.get(fieldnames_map["code"]) or "").strip().upper()
+        name = (row.get(fieldnames_map["name"]) or "").strip()
+        lab_office_str = (row.get(fieldnames_map["lab_office"]) or "").strip()
+        specialization = (row.get(fieldnames_map.get("specialization", "")) or "").strip() or None
+        acad_str = (row.get(fieldnames_map.get("academic_department", "")) or "").strip()
+
+        if not code or not name:
+            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code or "UNKNOWN", status="rejected", reason="Code and name are mandatory"))
+            rejected_count += 1
+            continue
+
+        if not lab_office_str:
+            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status="rejected", reason="Lab office is mandatory"))
+            rejected_count += 1
+            continue
+
+        target_acad_id = default_acad_id
+        if acad_str:
+            matched_acad = acad_by_name.get(acad_str.lower())
+            if not matched_acad and acad_str.isdigit():
+                matched_acad = acad_by_id.get(int(acad_str))
+            if not matched_acad:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason=f"Academic department '{acad_str}' not found",
+                    )
+                )
+                rejected_count += 1
+                continue
+            target_acad_id = matched_acad.id
+
+        matched_dept = db.execute(
+            select(Department).where(func.lower(Department.name) == lab_office_str.lower())
+        ).scalars().first()
+        if not matched_dept and lab_office_str.isdigit():
+            matched_dept = db.get(Department, int(lab_office_str))
+
+        if matched_dept:
+            if matched_dept.applicability != DepartmentApplicability.LAB_WORKSHOP:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason=f"'{matched_dept.name}' is a {matched_dept.label}, not a Lab / Workshop. Ask the admin to change its type.",
+                    )
+                )
+                rejected_count += 1
+                continue
+            if not matched_dept.is_active:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason=f"Lab office '{matched_dept.name}' is inactive.",
+                    )
+                )
+                rejected_count += 1
+                continue
+        else:
+            if lab_office_str not in offices_to_create:
+                offices_to_create.append(lab_office_str)
+
+            if not create_missing_offices:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason="Office does not exist. Preview and enable 'create missing offices', or ask the admin to create it.",
+                    )
+                )
+                rejected_count += 1
+                continue
+
+            if len(lab_office_str) < 3 or len(lab_office_str) > 80:
+                row_reports.append(
+                    LabCourseUploadRowReport(
+                        row_number=idx,
+                        code=code,
+                        status="rejected",
+                        reason="Lab office name must be between 3 and 80 characters.",
+                    )
+                )
+                rejected_count += 1
+                continue
+
+            if not dry_run:
+                new_office = Department(
+                    name=lab_office_str,
+                    kind=DepartmentKind.service,
+                    applicability=DepartmentApplicability.LAB_WORKSHOP,
+                    is_active=True,
+                    created_by_user_id=current_user.id,
+                )
+                db.add(new_office)
+                db.flush()
+                _record_admin_audit(
+                    db,
+                    current_user.id,
+                    action="ADMIN_DEPARTMENT_CREATED",
+                    entity_type="Department",
+                    entity_id=new_office.id,
+                    details={"name": new_office.name, "category": "LAB_WORKSHOP", "source": "admin_lab_upload"},
+                )
+                matched_dept = new_office
+            else:
+                matched_dept = Department(
+                    id=-(len(offices_to_create)),
+                    name=lab_office_str,
+                    kind=DepartmentKind.service,
+                    applicability=DepartmentApplicability.LAB_WORKSHOP,
+                    is_active=True,
+                )
+
+        if matched_dept.id > 0:
+            officers = active_officers_for(db, matched_dept.id)
+            if not officers and matched_dept.name not in offices_without_officers:
+                offices_without_officers.append(matched_dept.name)
+        else:
+            if matched_dept.name not in offices_without_officers:
+                offices_without_officers.append(matched_dept.name)
+
+        existing = db.execute(
+            select(LabCourse)
+            .where(func.upper(LabCourse.code) == code)
+            .options(joinedload(LabCourse.lab_department))
+        ).scalars().first()
+
+        if existing:
+            old_office_name = existing.lab_department.name if existing.lab_department else f"Department #{existing.lab_department_id}"
+            office_changed = (matched_dept.id > 0 and existing.lab_department_id != matched_dept.id) or (matched_dept.id < 0 and old_office_name.lower() != matched_dept.name.lower())
+
+            if office_changed:
+                status_text = f"updated (office changed from {old_office_name} to {matched_dept.name})"
+            else:
+                status_text = "updated"
+
+            if not dry_run:
+                existing.name = name
+                if matched_dept.id > 0:
+                    existing.lab_department_id = matched_dept.id
+                if target_acad_id:
+                    existing.academic_department_id = target_acad_id
+                existing.specialization = specialization
+                existing.is_active = True
+
+            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status=status_text))
+            updated_count += 1
+        else:
+            if not dry_run:
+                new_course = LabCourse(
+                    code=code,
+                    name=name,
+                    academic_department_id=target_acad_id,
+                    lab_department_id=matched_dept.id,
+                    specialization=specialization,
+                    is_active=True,
+                )
+                db.add(new_course)
+            row_reports.append(LabCourseUploadRowReport(row_number=idx, code=code, status="created"))
+            created_count += 1
+
+    if dry_run:
+        db.rollback()
+    else:
+        _record_admin_audit(
+            db,
+            current_user.id,
+            action="ADMIN_LAB_COURSES_UPLOADED",
+            entity_type="LabCourse",
+            entity_id=None,
+            details={
+                "total_rows": len(row_reports),
+                "created": created_count,
+                "updated": updated_count,
+                "rejected": rejected_count,
+                "offices_created": offices_to_create,
+            },
+        )
+        db.commit()
+
+    return LabCourseUploadResponse(
+        total_rows=len(row_reports),
+        created_count=created_count,
+        updated_count=updated_count,
+        rejected_count=rejected_count,
+        rows=row_reports,
+        offices_to_create=offices_to_create,
+        offices_without_officers=offices_without_officers,
+        dry_run=dry_run,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ADMIN DEPARTMENT & OFFICE MANAGEMENT
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/departments",
+    response_model=AdminDepartmentListResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_list_departments",
+    summary="List Departments with Management Metrics",
+    description="Lists university departments with category, label, active status, staffing and approval metrics.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def admin_list_departments(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+    category: str | None = Query(None, description="Filter by category: ACADEMIC, UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY"),
+    is_active: bool | None = Query(None, description="Filter by is_active status"),
+    search: str | None = Query(None, description="Search by department name"),
+) -> AdminDepartmentListResponse:
+    query = select(Department).order_by(Department.name.asc())
+    if is_active is not None:
+        query = query.where(Department.is_active == is_active)
+    if search and search.strip():
+        term = f"%{search.strip().lower()}%"
+        query = query.where(func.lower(Department.name).like(term))
+
+    depts = db.execute(query).scalars().all()
+    if category:
+        depts = [d for d in depts if d.category == category.upper()]
+
+    all_open_approvals = db.execute(
+        select(DepartmentApproval.department_id, func.count(DepartmentApproval.id))
+        .join(ClearanceRequest, DepartmentApproval.request_id == ClearanceRequest.id)
+        .where(
+            ClearanceRequest.status.not_in([
+                ClearanceStatus.CLEARED,
+                ClearanceStatus.REFUND_VERIFIED,
+                ClearanceStatus.CANCELLED,
+            ])
+        )
+        .group_by(DepartmentApproval.department_id)
+    ).all()
+    open_approvals_map = dict(all_open_approvals)
+
+    all_subjects = db.execute(
+        select(LabCourse.lab_department_id, func.count(LabCourse.id))
+        .group_by(LabCourse.lab_department_id)
+    ).all()
+    subject_map = dict(all_subjects)
+
+    items = []
+    for d in depts:
+        officers = active_officers_for(db, d.id)
+        officer_count = len(officers)
+        hod = active_hod_for(db, d.id) if d.kind == DepartmentKind.academic else None
+        missing_officer = (officer_count == 0)
+        missing_hod = (d.kind == DepartmentKind.academic and hod is None)
+        sub_count = subject_map.get(d.id, 0)
+        open_app_count = open_approvals_map.get(d.id, 0)
+
+        items.append(
+            AdminDepartmentListItem(
+                id=d.id,
+                name=d.name,
+                kind=d.kind.value,
+                applicability=d.applicability.value,
+                description=d.description,
+                category=d.category,
+                label=d.category_label,
+                is_active=d.is_active,
+                officer_count=officer_count,
+                subject_count=sub_count,
+                open_approvals_count=open_app_count,
+                missing_officer=missing_officer,
+                missing_hod=missing_hod,
+            )
+        )
+    return AdminDepartmentListResponse(total=len(items), items=items)
+
+
+@router.post(
+    "/departments",
+    response_model=AdminDepartmentListItem,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="admin_create_department",
+    summary="Create University Service Department",
+    description="Creates a service department under one of: UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid category or name length"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        409: {"model": ErrorResponse, "description": "Department name already exists"},
+    },
+)
+def admin_create_department(
+    body: AdminCreateDepartmentRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AdminDepartmentListItem:
+    cat = body.category.upper().strip()
+    valid_categories = {
+        "UNIVERSITY_OFFICE": DepartmentApplicability.ALWAYS,
+        "HOSTEL": DepartmentApplicability.HOSTELLER_ONLY,
+        "LAB_WORKSHOP": DepartmentApplicability.LAB_WORKSHOP,
+        "ADDITIONAL_FACILITY": DepartmentApplicability.ASSIGNED_ONLY,
+    }
+    if cat not in valid_categories:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid category '{body.category}'. Allowed categories: {', '.join(valid_categories.keys())}",
+        )
+
+    clean_name = body.name.strip()
+    if len(clean_name) < 3 or len(clean_name) > 80:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Department name must be between 3 and 80 characters.",
+        )
+
+    clash = db.execute(
+        select(Department).where(func.lower(Department.name) == clean_name.lower())
+    ).scalars().first()
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Department '{clean_name}' already exists.",
+        )
+
+    dept = Department(
+        name=clean_name,
+        kind=DepartmentKind.service,
+        applicability=valid_categories[cat],
+        description=body.description.strip() if body.description else None,
+        is_active=True,
+        created_by_user_id=current_user.id,
+    )
+    db.add(dept)
+    db.flush()
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_DEPARTMENT_CREATED",
+        entity_type="Department",
+        entity_id=dept.id,
+        details={"name": dept.name, "category": cat},
+    )
+    db.commit()
+    db.refresh(dept)
+
+    return AdminDepartmentListItem(
+        id=dept.id,
+        name=dept.name,
+        kind=dept.kind.value,
+        applicability=dept.applicability.value,
+        description=dept.description,
+        category=dept.category,
+        label=dept.category_label,
+        is_active=dept.is_active,
+        officer_count=0,
+        subject_count=0,
+        open_approvals_count=0,
+        missing_officer=True,
+        missing_hod=False,
+    )
+
+
+@router.patch(
+    "/departments/{id}",
+    response_model=AdminDepartmentListItem,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_patch_department",
+    summary="Update Department Details and Active Status",
+    description="Updates department name, description, category, or active status with safety guards against open clearance approvals.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid input or missing confirmation for core office deactivation"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Department not found"},
+        409: {"model": ErrorResponse, "description": "Open approvals on active requests or name clash"},
+    },
+)
+def admin_patch_department(
+    id: int,
+    body: AdminUpdateDepartmentRequest,
+    db: SessionDep,
+    confirm: bool = Query(False, description="Confirmation required when deactivating core university offices"),
+    current_user: User = Depends(require_admin),
+) -> AdminDepartmentListItem:
+    dept = db.get(Department, id)
+    if not dept:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found.")
+
+    valid_categories = {
+        "UNIVERSITY_OFFICE": DepartmentApplicability.ALWAYS,
+        "HOSTEL": DepartmentApplicability.HOSTELLER_ONLY,
+        "LAB_WORKSHOP": DepartmentApplicability.LAB_WORKSHOP,
+        "ADDITIONAL_FACILITY": DepartmentApplicability.ASSIGNED_ONLY,
+    }
+
+    target_cat = body.category.upper().strip() if body.category else None
+    if target_cat and target_cat not in valid_categories:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid category '{body.category}'. Allowed categories: {', '.join(valid_categories.keys())}",
+        )
+
+    is_deactivating = (body.is_active is False and dept.is_active is True)
+    is_changing_cat = (target_cat is not None and target_cat != dept.category)
+
+    if is_deactivating or is_changing_cat:
+        open_count = db.execute(
+            select(func.count(DepartmentApproval.id))
+            .join(ClearanceRequest, DepartmentApproval.request_id == ClearanceRequest.id)
+            .where(
+                DepartmentApproval.department_id == dept.id,
+                ClearanceRequest.status.not_in([
+                    ClearanceStatus.CLEARED,
+                    ClearanceStatus.REFUND_VERIFIED,
+                    ClearanceStatus.CANCELLED,
+                ]),
+            )
+        ).scalar() or 0
+        if open_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot modify office '{dept.name}': it has {open_count} open approvals on active clearance requests.",
+            )
+
+    if is_deactivating and dept.applicability in (DepartmentApplicability.ALWAYS, DepartmentApplicability.HOSTELLER_ONLY):
+        if not (confirm or body.confirm):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Deactivating core office '{dept.name}' ({dept.label}) requires explicit confirmation. Set confirm=true to proceed.",
+            )
+
+    if body.name is not None:
+        clean_name = body.name.strip()
+        if len(clean_name) < 3 or len(clean_name) > 80:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Department name must be between 3 and 80 characters.",
+            )
+        if clean_name.lower() != dept.name.lower():
+            clash = db.execute(
+                select(Department).where(func.lower(Department.name) == clean_name.lower(), Department.id != dept.id)
+            ).scalars().first()
+            if clash:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Department '{clean_name}' already exists.",
+                )
+            dept.name = clean_name
+
+    if body.description is not None:
+        dept.description = body.description.strip() if body.description else None
+
+    if target_cat:
+        dept.applicability = valid_categories[target_cat]
+        dept.kind = DepartmentKind.service
+
+    if body.is_active is not None:
+        dept.is_active = body.is_active
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_DEPARTMENT_UPDATED",
+        entity_type="Department",
+        entity_id=dept.id,
+        details={
+            "name": dept.name,
+            "category": dept.category,
+            "is_active": dept.is_active,
+        },
+    )
+    db.commit()
+    db.refresh(dept)
+
+    officers = active_officers_for(db, dept.id)
+    sub_count = db.execute(
+        select(func.count(LabCourse.id)).where(LabCourse.lab_department_id == dept.id)
+    ).scalar() or 0
+    open_count = db.execute(
+        select(func.count(DepartmentApproval.id))
+        .join(ClearanceRequest, DepartmentApproval.request_id == ClearanceRequest.id)
+        .where(
+            DepartmentApproval.department_id == dept.id,
+            ClearanceRequest.status.not_in([
+                ClearanceStatus.CLEARED,
+                ClearanceStatus.REFUND_VERIFIED,
+                ClearanceStatus.CANCELLED,
+            ]),
+        )
+    ).scalar() or 0
+
+    return AdminDepartmentListItem(
+        id=dept.id,
+        name=dept.name,
+        kind=dept.kind.value,
+        applicability=dept.applicability.value,
+        description=dept.description,
+        category=dept.category,
+        label=dept.category_label,
+        is_active=dept.is_active,
+        officer_count=len(officers),
+        subject_count=sub_count,
+        open_approvals_count=open_count,
+        missing_officer=(len(officers) == 0),
+        missing_hod=False,
+    )
+
+
+@router.delete(
+    "/departments/{id}",
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_delete_department",
+    summary="Delete Department",
+    description="Deletes a department only if no records (approvals, lab courses, memberships, roster overrides, programmes) refer to it.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Department not found"},
+        409: {"model": ErrorResponse, "description": "Department has referencing records; deactivate it instead"},
+    },
+)
+def admin_delete_department(
+    id: int,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> dict:
+    dept = db.get(Department, id)
+    if not dept:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Department not found.")
+
+    app_count = db.execute(select(func.count(DepartmentApproval.id)).where(DepartmentApproval.department_id == dept.id)).scalar() or 0
+    lc_count = db.execute(select(func.count(LabCourse.id)).where(or_(LabCourse.lab_department_id == dept.id, LabCourse.academic_department_id == dept.id))).scalar() or 0
+    mem_count = db.execute(select(func.count(UserDepartment.department_id)).where(UserDepartment.department_id == dept.id)).scalar() or 0
+    u_count = db.execute(select(func.count(User.id)).where(User.department_id == dept.id)).scalar() or 0
+    roster_overrides = db.execute(select(func.count(RosterAssignedDepartment.department_id)).where(RosterAssignedDepartment.department_id == dept.id)).scalar() or 0
+    prog_count = db.execute(select(func.count(Programme.id)).where(Programme.academic_department_id == dept.id)).scalar() or 0
+
+    total_refs = app_count + lc_count + mem_count + u_count + roster_overrides + prog_count
+    if total_refs > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete department because existing records refer to it. Deactivate it instead.",
+        )
+
+    dept_name = dept.name
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_DEPARTMENT_DELETED",
+        entity_type="Department",
+        entity_id=dept.id,
+        details={"name": dept_name},
+    )
+    db.delete(dept)
+    db.commit()
+
+    return {"detail": f"Department '{dept_name}' successfully deleted."}
+
+
+@router.post(
+    "/departments/bulk-category",
+    response_model=BulkCategoryResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_bulk_department_category",
+    summary="Bulk Update Department Categories",
+    description="Bulk updates categories for multiple departments. Refused with 409 if any department has open clearance approvals.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid category"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        409: {"model": ErrorResponse, "description": "Department has open approvals on active requests"},
+    },
+)
+def admin_bulk_department_category(
+    body: BulkCategoryRequest,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> BulkCategoryResponse:
+    target_cat = body.category.upper().strip()
+    valid_categories = {
+        "UNIVERSITY_OFFICE": DepartmentApplicability.ALWAYS,
+        "HOSTEL": DepartmentApplicability.HOSTELLER_ONLY,
+        "LAB_WORKSHOP": DepartmentApplicability.LAB_WORKSHOP,
+        "ADDITIONAL_FACILITY": DepartmentApplicability.ASSIGNED_ONLY,
+    }
+    if target_cat not in valid_categories:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid category '{body.category}'. Allowed categories: {', '.join(valid_categories.keys())}",
+        )
+
+    depts = db.execute(
+        select(Department).where(Department.id.in_(body.department_ids))
+    ).scalars().all()
+
+    for d in depts:
+        if d.category != target_cat:
+            open_count = db.execute(
+                select(func.count(DepartmentApproval.id))
+                .join(ClearanceRequest, DepartmentApproval.request_id == ClearanceRequest.id)
+                .where(
+                    DepartmentApproval.department_id == d.id,
+                    ClearanceRequest.status.not_in([
+                        ClearanceStatus.CLEARED,
+                        ClearanceStatus.REFUND_VERIFIED,
+                        ClearanceStatus.CANCELLED,
+                    ]),
+                )
+            ).scalar() or 0
+            if open_count > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Cannot change category for department '{d.name}': it has {open_count} open approvals on active requests.",
+                )
+
+    for d in depts:
+        d.applicability = valid_categories[target_cat]
+        d.kind = DepartmentKind.service
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_DEPARTMENTS_BULK_CATEGORY_UPDATED",
+        entity_type="Department",
+        entity_id=None,
+        details={"department_ids": body.department_ids, "category": target_cat},
+    )
+    db.commit()
+
+    return BulkCategoryResponse(
+        updated_count=len(depts),
+        detail=f"Successfully updated {len(depts)} departments to category {target_cat}.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# ACADEMIC STRUCTURE MANAGEMENT (Faculties, Departments, Programmes)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/faculties",
+    response_model=list[FacultyResponse],
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_list_faculties",
+    summary="List University Faculties",
+    description="Returns all faculties with department counts.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def admin_list_faculties(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> list[FacultyResponse]:
+    faculties = db.execute(select(Faculty).order_by(Faculty.name.asc())).scalars().all()
+    dept_counts = dict(
+        db.execute(
+            select(Department.faculty_id, func.count(Department.id))
+            .where(Department.faculty_id.isnot(None))
+            .group_by(Department.faculty_id)
+        ).all()
+    )
+    return [
+        FacultyResponse(
+            id=f.id,
+            name=f.name,
+            short_code=f.short_code,
+            department_count=dept_counts.get(f.id, 0),
+        )
+        for f in faculties
+    ]
+
+
+@router.post(
+    "/faculties",
+    response_model=FacultyResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="admin_create_faculty",
+    summary="Create Faculty",
+    description="Creates a new university faculty.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid format"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        409: {"model": ErrorResponse, "description": "Faculty name or short code already exists"},
+    },
+)
+def admin_create_faculty(
+    body: FacultyCreate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> FacultyResponse:
+    clean_name = body.name.strip()
+    clean_code = body.short_code.strip().upper()
+
+    clash = db.execute(
+        select(Faculty).where(
+            or_(
+                func.lower(Faculty.name) == clean_name.lower(),
+                func.upper(Faculty.short_code) == clean_code,
+            )
+        )
+    ).scalars().first()
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Faculty with name '{clean_name}' or short code '{clean_code}' already exists.",
+        )
+
+    faculty = Faculty(name=clean_name, short_code=clean_code)
+    db.add(faculty)
+    db.flush()
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_FACULTY_CREATED",
+        entity_type="Faculty",
+        entity_id=faculty.id,
+        details={"name": faculty.name, "short_code": faculty.short_code},
+    )
+    db.commit()
+    db.refresh(faculty)
+
+    return FacultyResponse(id=faculty.id, name=faculty.name, short_code=faculty.short_code, department_count=0)
+
+
+@router.patch(
+    "/faculties/{id}",
+    response_model=FacultyResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_patch_faculty",
+    summary="Update Faculty",
+    description="Updates faculty name or short code.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid format"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Faculty not found"},
+        409: {"model": ErrorResponse, "description": "Name or short code conflict"},
+    },
+)
+def admin_patch_faculty(
+    id: int,
+    body: FacultyUpdate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> FacultyResponse:
+    faculty = db.get(Faculty, id)
+    if not faculty:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Faculty not found.")
+
+    if body.name is not None:
+        clean_name = body.name.strip()
+        clash = db.execute(
+            select(Faculty).where(func.lower(Faculty.name) == clean_name.lower(), Faculty.id != id)
+        ).scalars().first()
+        if clash:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Faculty name '{clean_name}' already exists.")
+        faculty.name = clean_name
+
+    if body.short_code is not None:
+        clean_code = body.short_code.strip().upper()
+        clash = db.execute(
+            select(Faculty).where(func.upper(Faculty.short_code) == clean_code, Faculty.id != id)
+        ).scalars().first()
+        if clash:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Faculty short code '{clean_code}' already exists.")
+        faculty.short_code = clean_code
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_FACULTY_UPDATED",
+        entity_type="Faculty",
+        entity_id=faculty.id,
+        details={"name": faculty.name, "short_code": faculty.short_code},
+    )
+    db.commit()
+    db.refresh(faculty)
+
+    dept_count = db.execute(
+        select(func.count(Department.id)).where(Department.faculty_id == faculty.id)
+    ).scalar() or 0
+
+    return FacultyResponse(id=faculty.id, name=faculty.name, short_code=faculty.short_code, department_count=dept_count)
+
+
+@router.get(
+    "/academic-departments",
+    response_model=list[AcademicDepartmentResponse],
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_list_academic_departments",
+    summary="List Academic Departments",
+    description="Returns all academic departments with programme and student metrics.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def admin_list_academic_departments(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> list[AcademicDepartmentResponse]:
+    depts = db.execute(
+        select(Department)
+        .where(Department.kind == DepartmentKind.academic)
+        .options(joinedload(Department.faculty))
+        .order_by(Department.name.asc())
+    ).scalars().all()
+
+    prog_counts = dict(
+        db.execute(
+            select(Programme.academic_department_id, func.count(Programme.id))
+            .group_by(Programme.academic_department_id)
+        ).all()
+    )
+
+    student_counts = dict(
+        db.execute(
+            select(Programme.academic_department_id, func.count(StudentRoster.id))
+            .join(StudentRoster, StudentRoster.programme_id == Programme.id)
+            .group_by(Programme.academic_department_id)
+        ).all()
+    )
+
+    return [
+        AcademicDepartmentResponse(
+            id=d.id,
+            name=d.name,
+            faculty_id=d.faculty_id,
+            faculty_name=d.faculty.name if d.faculty else None,
+            is_active=d.is_active,
+            category="ACADEMIC",
+            label="Academic department",
+            programme_count=prog_counts.get(d.id, 0),
+            student_count=student_counts.get(d.id, 0),
+        )
+        for d in depts
+    ]
+
+
+@router.post(
+    "/academic-departments",
+    response_model=AcademicDepartmentResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="admin_create_academic_department",
+    summary="Create Academic Department",
+    description="Creates a new academic department bound to a faculty.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid input or faculty not found"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        409: {"model": ErrorResponse, "description": "Department name already exists"},
+    },
+)
+def admin_create_academic_department(
+    body: AcademicDepartmentCreate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AcademicDepartmentResponse:
+    faculty = db.get(Faculty, body.faculty_id)
+    if not faculty:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Faculty ID {body.faculty_id} not found.")
+
+    clean_name = body.name.strip()
+    clash = db.execute(
+        select(Department).where(func.lower(Department.name) == clean_name.lower())
+    ).scalars().first()
+    if clash:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Department '{clean_name}' already exists.")
+
+    dept = Department(
+        name=clean_name,
+        kind=DepartmentKind.academic,
+        applicability=DepartmentApplicability.OWN_ACADEMIC,
+        faculty_id=faculty.id,
+        is_active=body.is_active,
+        created_by_user_id=current_user.id,
+    )
+    db.add(dept)
+    db.flush()
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_ACADEMIC_DEPARTMENT_CREATED",
+        entity_type="Department",
+        entity_id=dept.id,
+        details={"name": dept.name, "faculty_id": faculty.id},
+    )
+    db.commit()
+    db.refresh(dept)
+
+    return AcademicDepartmentResponse(
+        id=dept.id,
+        name=dept.name,
+        faculty_id=dept.faculty_id,
+        faculty_name=faculty.name,
+        is_active=dept.is_active,
+        category="ACADEMIC",
+        label="Academic department",
+        programme_count=0,
+        student_count=0,
+    )
+
+
+@router.patch(
+    "/academic-departments/{id}",
+    response_model=AcademicDepartmentResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_patch_academic_department",
+    summary="Update Academic Department",
+    description="Updates academic department name, faculty, or active status with safety guards against active students.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid input or faculty not found"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Department not found"},
+        409: {"model": ErrorResponse, "description": "Deactivation refused while students or open requests exist, or name clash"},
+    },
+)
+def admin_patch_academic_department(
+    id: int,
+    body: AcademicDepartmentUpdate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> AcademicDepartmentResponse:
+    dept = db.get(Department, id)
+    if not dept or dept.kind != DepartmentKind.academic:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Academic department not found.")
+
+    if body.is_active is False and dept.is_active is True:
+        open_reqs = db.execute(
+            select(func.count(ClearanceRequest.id))
+            .join(StudentRoster, ClearanceRequest.roster_id == StudentRoster.id)
+            .join(Programme, StudentRoster.programme_id == Programme.id)
+            .where(
+                Programme.academic_department_id == dept.id,
+                ClearanceRequest.status.not_in([
+                    ClearanceStatus.CLEARED,
+                    ClearanceStatus.REFUND_VERIFIED,
+                    ClearanceStatus.CANCELLED,
+                ]),
+            )
+        ).scalar() or 0
+        if open_reqs > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot deactivate academic department '{dept.name}': it has {open_reqs} open clearance requests.",
+            )
+
+        active_students = db.execute(
+            select(func.count(StudentRoster.id))
+            .join(Programme, StudentRoster.programme_id == Programme.id)
+            .join(User, StudentRoster.id == User.roster_id)
+            .where(
+                Programme.academic_department_id == dept.id,
+                User.is_active == True,
+            )
+        ).scalar() or 0
+        if active_students > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot deactivate academic department '{dept.name}': it has {active_students} active student accounts.",
+            )
+        dept.is_active = False
+    elif body.is_active is True:
+        dept.is_active = True
+
+    if body.name is not None:
+        clean_name = body.name.strip()
+        clash = db.execute(
+            select(Department).where(func.lower(Department.name) == clean_name.lower(), Department.id != id)
+        ).scalars().first()
+        if clash:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Department '{clean_name}' already exists.")
+        dept.name = clean_name
+
+    if body.faculty_id is not None:
+        faculty = db.get(Faculty, body.faculty_id)
+        if not faculty:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Faculty ID {body.faculty_id} not found.")
+        dept.faculty_id = faculty.id
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_ACADEMIC_DEPARTMENT_UPDATED",
+        entity_type="Department",
+        entity_id=dept.id,
+        details={"name": dept.name, "is_active": dept.is_active},
+    )
+    db.commit()
+    db.refresh(dept)
+
+    prog_count = db.execute(
+        select(func.count(Programme.id)).where(Programme.academic_department_id == dept.id)
+    ).scalar() or 0
+    student_count = db.execute(
+        select(func.count(StudentRoster.id))
+        .join(Programme, StudentRoster.programme_id == Programme.id)
+        .where(Programme.academic_department_id == dept.id)
+    ).scalar() or 0
+
+    return AcademicDepartmentResponse(
+        id=dept.id,
+        name=dept.name,
+        faculty_id=dept.faculty_id,
+        faculty_name=dept.faculty.name if dept.faculty else None,
+        is_active=dept.is_active,
+        category="ACADEMIC",
+        label="Academic department",
+        programme_count=prog_count,
+        student_count=student_count,
+    )
+
+
+@router.get(
+    "/programmes",
+    response_model=list[ProgrammeResponse],
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_list_programmes",
+    summary="List Programmes (Admin)",
+    description="Returns all programmes with academic department, faculty, and student counts.",
+    responses={
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+    },
+)
+def admin_list_programmes(
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> list[ProgrammeResponse]:
+    progs = db.execute(
+        select(Programme)
+        .options(joinedload(Programme.department).joinedload(Department.faculty))
+        .order_by(Programme.name.asc())
+    ).scalars().all()
+
+    student_counts = dict(
+        db.execute(
+            select(StudentRoster.programme_id, func.count(StudentRoster.id))
+            .group_by(StudentRoster.programme_id)
+        ).all()
+    )
+
+    return [
+        ProgrammeResponse(
+            id=p.id,
+            name=p.name,
+            academic_department_id=p.academic_department_id,
+            academic_department_name=p.department.name if p.department else None,
+            faculty_id=p.department.faculty_id if p.department else None,
+            faculty_name=p.department.faculty.name if (p.department and p.department.faculty) else None,
+            is_active=p.is_active,
+            student_count=student_counts.get(p.id, 0),
+        )
+        for p in progs
+    ]
+
+
+@router.post(
+    "/programmes",
+    response_model=ProgrammeResponse,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="admin_create_programme",
+    summary="Create Programme",
+    description="Creates a new academic programme under an academic department.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid input or department not academic"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        409: {"model": ErrorResponse, "description": "Programme name already exists"},
+    },
+)
+def admin_create_programme(
+    body: ProgrammeCreate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> ProgrammeResponse:
+    dept = db.get(Department, body.academic_department_id)
+    if not dept or dept.kind != DepartmentKind.academic:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Department ID {body.academic_department_id} is not a valid academic department.",
+        )
+
+    clean_name = body.name.strip()
+    clash = db.execute(
+        select(Programme).where(func.lower(Programme.name) == clean_name.lower())
+    ).scalars().first()
+    if clash:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Programme '{clean_name}' already exists.",
+        )
+
+    prog = Programme(
+        name=clean_name,
+        academic_department_id=dept.id,
+        is_active=body.is_active,
+    )
+    db.add(prog)
+    db.flush()
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_PROGRAMME_CREATED",
+        entity_type="Programme",
+        entity_id=prog.id,
+        details={"name": prog.name, "academic_department_id": dept.id},
+    )
+    db.commit()
+    db.refresh(prog)
+
+    return ProgrammeResponse(
+        id=prog.id,
+        name=prog.name,
+        academic_department_id=dept.id,
+        academic_department_name=dept.name,
+        faculty_id=dept.faculty_id,
+        faculty_name=dept.faculty.name if dept.faculty else None,
+        is_active=prog.is_active,
+        student_count=0,
+    )
+
+
+@router.patch(
+    "/programmes/{id}",
+    response_model=ProgrammeResponse,
+    status_code=status.HTTP_200_OK,
+    operation_id="admin_patch_programme",
+    summary="Update Programme",
+    description="Updates programme name, academic department, or active status with safety guards against active students.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid input or department not academic"},
+        403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
+        404: {"model": ErrorResponse, "description": "Programme not found"},
+        409: {"model": ErrorResponse, "description": "Moving programme with roster entries refused, or deactivating with active students"},
+    },
+)
+def admin_patch_programme(
+    id: int,
+    body: ProgrammeUpdate,
+    db: SessionDep,
+    current_user: User = Depends(require_admin),
+) -> ProgrammeResponse:
+    prog = db.get(Programme, id)
+    if not prog:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Programme not found.")
+
+    if body.academic_department_id is not None and body.academic_department_id != prog.academic_department_id:
+        roster_count = db.execute(
+            select(func.count(StudentRoster.id)).where(StudentRoster.programme_id == prog.id)
+        ).scalar() or 0
+        if roster_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot move programme '{prog.name}' to another academic department: it has {roster_count} student roster entries.",
+            )
+
+        target_dept = db.get(Department, body.academic_department_id)
+        if not target_dept or target_dept.kind != DepartmentKind.academic:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Department ID {body.academic_department_id} is not a valid academic department.",
+            )
+        prog.academic_department_id = target_dept.id
+
+    if body.is_active is False and prog.is_active is True:
+        open_reqs = db.execute(
+            select(func.count(ClearanceRequest.id))
+            .join(StudentRoster, ClearanceRequest.roster_id == StudentRoster.id)
+            .where(
+                StudentRoster.programme_id == prog.id,
+                ClearanceRequest.status.not_in([
+                    ClearanceStatus.CLEARED,
+                    ClearanceStatus.REFUND_VERIFIED,
+                    ClearanceStatus.CANCELLED,
+                ]),
+            )
+        ).scalar() or 0
+        if open_reqs > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot deactivate programme '{prog.name}': it has {open_reqs} open clearance requests.",
+            )
+
+        active_students = db.execute(
+            select(func.count(StudentRoster.id))
+            .join(User, StudentRoster.id == User.roster_id)
+            .where(
+                StudentRoster.programme_id == prog.id,
+                User.is_active == True,
+            )
+        ).scalar() or 0
+        if active_students > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Cannot deactivate programme '{prog.name}': it has {active_students} active student accounts.",
+            )
+        prog.is_active = False
+    elif body.is_active is True:
+        prog.is_active = True
+
+    if body.name is not None:
+        clean_name = body.name.strip()
+        clash = db.execute(
+            select(Programme).where(func.lower(Programme.name) == clean_name.lower(), Programme.id != id)
+        ).scalars().first()
+        if clash:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Programme '{clean_name}' already exists.",
+            )
+        prog.name = clean_name
+
+    _record_admin_audit(
+        db,
+        current_user.id,
+        action="ADMIN_PROGRAMME_UPDATED",
+        entity_type="Programme",
+        entity_id=prog.id,
+        details={"name": prog.name, "is_active": prog.is_active},
+    )
+    db.commit()
+    db.refresh(prog)
+
+    student_count = db.execute(
+        select(func.count(StudentRoster.id)).where(StudentRoster.programme_id == prog.id)
+    ).scalar() or 0
+
+    dept = prog.department
+    return ProgrammeResponse(
+        id=prog.id,
+        name=prog.name,
+        academic_department_id=prog.academic_department_id,
+        academic_department_name=dept.name if dept else None,
+        faculty_id=dept.faculty_id if dept else None,
+        faculty_name=dept.faculty.name if (dept and dept.faculty) else None,
+        is_active=prog.is_active,
+        student_count=student_count,
+    )
+
 
 

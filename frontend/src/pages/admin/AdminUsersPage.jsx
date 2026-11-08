@@ -45,6 +45,7 @@ import {
   Building2,
   Trash2,
   Plus,
+  Edit,
 } from 'lucide-react'
 
 const ROLE_BADGES = {
@@ -94,6 +95,12 @@ export function AdminUsersPage() {
   const [bulkGoogleOnly, setBulkGoogleOnly] = useState(false)
   const [bulkReport, setBulkReport] = useState(null)
   const [bulkError, setBulkError] = useState('')
+
+  // Edit User State
+  const [editUser, setEditUser] = useState(null)
+  const [editUserForm, setEditUserForm] = useState({ full_name: '', email: '', unlink_google: false })
+  const [editUserError, setEditUserError] = useState('')
+  const [confirmUnlinkOpen, setConfirmUnlinkOpen] = useState(false)
 
   // Confirmation Alert Dialogs
   const [confirmResetTarget, setConfirmResetTarget] = useState(null) // user object
@@ -247,6 +254,24 @@ export function AdminUsersPage() {
     onError: (err) => {
       setConfirmRemoveTarget(null)
       const msg = err.response?.data?.detail || 'Failed to remove department.'
+      toast.error(msg)
+    },
+  })
+
+  // Patch User Mutation
+  const patchUserMutation = useMutation({
+    mutationFn: ({ id, data }) => adminApi.patchUser(id, data),
+    onSuccess: (updated) => {
+      toast.success(`User "${updated.full_name}" updated successfully.`)
+      setEditUser(null)
+      setEditUserError('')
+      setConfirmUnlinkOpen(false)
+      queryClient.invalidateQueries({ queryKey: ['admin', 'users'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'offices'] })
+    },
+    onError: (err) => {
+      const msg = err.response?.data?.detail || 'Failed to update user.'
+      setEditUserError(msg)
       toast.error(msg)
     },
   })
@@ -481,6 +506,26 @@ export function AdminUsersPage() {
                 >
                   <Building2 className="w-3 h-3 text-zinc-500" />
                   Offices ({target.departments?.length || (target.department_id ? 1 : 0)})
+                </Button>
+              )}
+
+              {target.role !== 'student' && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setEditUser(target)
+                    setEditUserForm({
+                      full_name: target.full_name || '',
+                      email: target.email || '',
+                      unlink_google: false,
+                    })
+                    setEditUserError('')
+                  }}
+                  className="h-7 text-[11px] gap-1 bg-white hover:bg-zinc-50 text-zinc-700 border-zinc-200"
+                >
+                  <Edit className="w-3 h-3 text-zinc-500" />
+                  Edit
                 </Button>
               )}
 
@@ -1570,6 +1615,192 @@ export function AdminUsersPage() {
               className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
             >
               {addDepartmentMutation.isPending ? 'Assigning...' : 'Confirm Assignment'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* EDIT USER DIALOG */}
+      <Dialog
+        open={Boolean(editUser)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditUser(null)
+            setEditUserError('')
+          }
+        }}
+      >
+        <DialogContent className="bg-white p-6 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-heading text-lg font-bold text-zinc-950 flex items-center gap-2">
+              <Edit className="w-5 h-5 text-zinc-900" />
+              Edit User Profile
+            </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500">
+              Update user details for #{editUser?.id} ({editUser?.role}).
+            </DialogDescription>
+          </DialogHeader>
+
+          {editUserError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-md text-xs text-rose-800 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div>{editUserError}</div>
+            </div>
+          )}
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!editUserForm.full_name.trim()) {
+                setEditUserError('Full name is required.')
+                return
+              }
+              if (!editUserForm.email.trim()) {
+                setEditUserError('Email address is required.')
+                return
+              }
+              patchUserMutation.mutate({
+                id: editUser.id,
+                data: {
+                  full_name: editUserForm.full_name.trim(),
+                  email: editUserForm.email.trim(),
+                  unlink_google: editUserForm.unlink_google,
+                },
+              })
+            }}
+            className="space-y-4"
+          >
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-name" className="text-xs font-semibold text-zinc-700">
+                Full Name
+              </Label>
+              <Input
+                id="edit-name"
+                value={editUserForm.full_name}
+                onChange={(e) =>
+                  setEditUserForm((prev) => ({ ...prev, full_name: e.target.value }))
+                }
+                placeholder="e.g. Dr. Rajesh Kumar"
+                className="h-9 text-xs"
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-email" className="text-xs font-semibold text-zinc-700">
+                Email Address
+              </Label>
+              <Input
+                id="edit-email"
+                type="email"
+                value={editUserForm.email}
+                onChange={(e) =>
+                  setEditUserForm((prev) => ({ ...prev, email: e.target.value }))
+                }
+                placeholder="officer@svsu.ac.in"
+                className="h-9 text-xs"
+                required
+              />
+            </div>
+
+            <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-md space-y-2">
+              <div className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  id="unlink_google_cb"
+                  checked={editUserForm.unlink_google}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setConfirmUnlinkOpen(true)
+                    } else {
+                      setEditUserForm((prev) => ({ ...prev, unlink_google: false }))
+                    }
+                  }}
+                  className="h-4 w-4 mt-0.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900"
+                />
+                <div className="space-y-0.5">
+                  <label
+                    htmlFor="unlink_google_cb"
+                    className="text-xs font-medium text-zinc-900 cursor-pointer select-none"
+                  >
+                    Unlink Google account
+                  </label>
+                  <p className="text-[11px] text-zinc-500 leading-relaxed">
+                    Unbinds external Google authentication. Required when changing the email of a Google-linked user.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="pt-3 border-t border-zinc-100 flex gap-2 sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setEditUser(null)
+                  setEditUserError('')
+                }}
+                disabled={patchUserMutation.isPending}
+                className="text-xs h-9"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={patchUserMutation.isPending}
+                className="text-xs h-9 bg-primary text-primary-foreground hover:bg-zinc-800 font-semibold"
+              >
+                {patchUserMutation.isPending ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* CONFIRM UNLINK GOOGLE ALERT DIALOG */}
+      <AlertDialog
+        open={confirmUnlinkOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setConfirmUnlinkOpen(false)
+          }
+        }}
+      >
+        <AlertDialogContent className="bg-white p-6 max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-heading text-base font-bold text-zinc-950 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+              Unlink Google Account?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs space-y-2 text-zinc-600">
+              <p>
+                Unlinking Google Single Sign-On will decouple this staff member&apos;s Google identity.
+              </p>
+              <p className="text-[11px] text-zinc-500">
+                The user will be required to authenticate with password credentials or reset their password until re-authenticating with Google.
+              </p>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="pt-2">
+            <AlertDialogCancel
+              onClick={() => {
+                setEditUserForm((prev) => ({ ...prev, unlink_google: false }))
+                setConfirmUnlinkOpen(false)
+              }}
+              className="text-xs h-9"
+            >
+              Keep Google Link
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setEditUserForm((prev) => ({ ...prev, unlink_google: true }))
+                setConfirmUnlinkOpen(false)
+              }}
+              className="bg-amber-600 text-white hover:bg-amber-700 text-xs h-9 font-semibold"
+            >
+              Confirm Unlink
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

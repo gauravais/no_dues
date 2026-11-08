@@ -1,7 +1,7 @@
 """Faculty, Department, and Programme models."""
 import enum
 from sqlalchemy import (
-    Column, Integer, String, ForeignKey, Enum as SAEnum, CheckConstraint, Index
+    Column, Integer, String, Boolean, ForeignKey, Enum as SAEnum, CheckConstraint, Index, text
 )
 from sqlalchemy.orm import relationship
 from backend.app.core.database import Base
@@ -17,6 +17,7 @@ class DepartmentApplicability(str, enum.Enum):
     HOSTELLER_ONLY = "HOSTELLER_ONLY"
     ASSIGNED_ONLY = "ASSIGNED_ONLY"
     OWN_ACADEMIC = "OWN_ACADEMIC"
+    LAB_WORKSHOP = "LAB_WORKSHOP"
 
 
 class Faculty(Base):
@@ -41,6 +42,8 @@ class Department(Base):
     )
     faculty_id = Column(Integer, ForeignKey("faculties.id"), nullable=True)
     description = Column(String(500), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    created_by_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     __table_args__ = (
         # Academic departments MUST have faculty_id and applicability OWN_ACADEMIC
@@ -49,6 +52,7 @@ class Department(Base):
             name="ck_department_kind_faculty_applicability",
         ),
         Index("ix_departments_faculty_id", "faculty_id"),
+        Index("ix_departments_created_by_user_id", "created_by_user_id"),
     )
 
     faculty = relationship("Faculty", back_populates="departments")
@@ -57,6 +61,36 @@ class Department(Base):
     user_memberships = relationship("UserDepartment", back_populates="department", cascade="all, delete-orphan", foreign_keys="UserDepartment.department_id")
     roster_assigned = relationship("RosterAssignedDepartment", back_populates="department")
     approvals = relationship("DepartmentApproval", back_populates="department")
+    creator = relationship("User", foreign_keys=[created_by_user_id])
+
+    @property
+    def category(self) -> str:
+        if self.kind == DepartmentKind.academic or self.applicability == DepartmentApplicability.OWN_ACADEMIC:
+            return "ACADEMIC"
+        if self.applicability == DepartmentApplicability.ALWAYS:
+            return "UNIVERSITY_OFFICE"
+        if self.applicability == DepartmentApplicability.HOSTELLER_ONLY:
+            return "HOSTEL"
+        if self.applicability == DepartmentApplicability.LAB_WORKSHOP:
+            return "LAB_WORKSHOP"
+        if self.applicability == DepartmentApplicability.ASSIGNED_ONLY:
+            return "ADDITIONAL_FACILITY"
+        return "ADDITIONAL_FACILITY"
+
+    @property
+    def category_label(self) -> str:
+        labels = {
+            "ACADEMIC": "Academic department",
+            "UNIVERSITY_OFFICE": "University office",
+            "HOSTEL": "Hostel",
+            "LAB_WORKSHOP": "Lab / Workshop",
+            "ADDITIONAL_FACILITY": "Additional facility",
+        }
+        return labels.get(self.category, "Additional facility")
+
+    @property
+    def label(self) -> str:
+        return self.category_label
 
 
 class Programme(Base):
@@ -67,6 +101,7 @@ class Programme(Base):
     academic_department_id = Column(
         Integer, ForeignKey("departments.id"), nullable=False
     )
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
 
     __table_args__ = (
         Index("ix_programmes_department_id", "academic_department_id"),

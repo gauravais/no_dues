@@ -145,10 +145,10 @@ export function StudentDashboard() {
     refetchInterval: 30000,
   })
 
-  // 3. Fetch Assigned-Only Departments for "Add Office"
+  // 3. Fetch Additional Facilities for "Add an additional facility"
   const { data: assignedOnlyDepts = [] } = useQuery({
-    queryKey: ['departments', 'assigned-only'],
-    queryFn: () => departmentApi.getAssignedOnlyDepartments(),
+    queryKey: ['departments', 'additional-facilities'],
+    queryFn: () => departmentApi.getAdditionalFacilities(),
     enabled: addOfficeOpen,
   })
 
@@ -686,7 +686,7 @@ export function StudentDashboard() {
                 <CardContent className="p-6 pt-0 space-y-4 text-xs text-zinc-600">
                   <p className="leading-relaxed">
                     Under the updated university clearance workflow, your clearance reviews are determined by your own declarations:
-                    hostel status, specific lab subjects used in your academic department, and any additional assigned-only offices.
+                    hostel status, specific lab subjects used in your academic department, and any additional facilities.
                   </p>
 
                   {!bankDetails && (
@@ -801,7 +801,7 @@ export function StudentDashboard() {
                       <div className="flex items-center gap-2">
                         <PlusCircle className="w-4 h-4 text-zinc-900" />
                         <CardTitle className="text-sm font-bold text-zinc-950">
-                          Add Further Offices or Lab Subjects
+                          Add Further Facilities or Labs
                         </CardTitle>
                       </div>
                       <CardDescription className="text-xs mt-1 text-zinc-600">
@@ -813,20 +813,20 @@ export function StudentDashboard() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => setAddOfficeOpen(true)}
-                        className="text-xs gap-1.5 h-8 bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-100"
-                      >
-                        <Building2 className="w-3.5 h-3.5" />
-                        Add Office
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
                         onClick={() => setAddLabsOpen(true)}
                         className="text-xs gap-1.5 h-8 bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-100"
                       >
                         <FlaskConical className="w-3.5 h-3.5" />
-                        Add Lab Subjects
+                        Add a lab or workshop
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setAddOfficeOpen(true)}
+                        className="text-xs gap-1.5 h-8 bg-white border-zinc-200 text-zinc-800 hover:bg-zinc-100"
+                      >
+                        <Building2 className="w-3.5 h-3.5" />
+                        Add an additional facility
                       </Button>
                     </div>
                   </div>
@@ -879,9 +879,11 @@ export function StudentDashboard() {
                                 <CardTitle className="text-sm font-bold text-zinc-900 leading-tight">
                                   {item.department_name}
                                 </CardTitle>
-                                <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground block mt-0.5">
-                                  {item.department_kind} office
-                                </span>
+                                <div className="mt-1">
+                                  <Badge variant="outline" className="text-[10px] font-medium bg-zinc-50 border-zinc-200 text-zinc-700">
+                                    {item.department_label || (item.department_category ? item.department_category.replace(/_/g, ' ') : 'Department')}
+                                  </Badge>
+                                </div>
                               </div>
                               <StatusBadge status={item.status} size="sm" />
                             </div>
@@ -992,38 +994,47 @@ export function StudentDashboard() {
         )}
       </div>
 
-      {/* Dialog: Add Office */}
+      {/* Dialog: Add an Additional Facility */}
       <Dialog open={addOfficeOpen} onOpenChange={setAddOfficeOpen}>
         <DialogContent className="sm:max-w-md bg-white p-6">
           <DialogHeader className="pb-3">
             <DialogTitle className="font-heading font-bold text-base">
-              Add Office to Clearance Dossier
+              Add an Additional Facility
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Select an assigned-only university office to add to your clearance reviews.
+              Select an additional facility or center to add to your clearance reviews.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="officeSelect" className="text-xs font-semibold text-zinc-800">
-                Office / Department
+                Facility / Center
               </Label>
               {availableToAddOffices.length === 0 ? (
                 <p className="text-xs text-zinc-500 italic py-2">
-                  All available assigned-only offices have already been added to your request.
+                  All available additional facilities have already been added to your request.
                 </p>
               ) : (
                 <Select value={selectedOfficeId} onValueChange={setSelectedOfficeId}>
                   <SelectTrigger id="officeSelect" className="text-xs">
-                    <SelectValue placeholder="Select an office to add..." />
+                    <SelectValue placeholder="Select a facility to add..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableToAddOffices.map((dept) => (
-                      <SelectItem key={dept.id} value={String(dept.id)} className="text-xs">
-                        {dept.name} ({dept.code})
-                      </SelectItem>
-                    ))}
+                    {availableToAddOffices.map((dept) => {
+                      const isAvailable = dept.has_active_officer !== false
+                      return (
+                        <SelectItem
+                          key={dept.id}
+                          value={String(dept.id)}
+                          disabled={!isAvailable}
+                          className="text-xs"
+                        >
+                          {dept.name} {dept.code ? `(${dept.code})` : ''}
+                          {!isAvailable ? ' (Not available yet)' : ''}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               )}
@@ -1032,7 +1043,7 @@ export function StudentDashboard() {
             <div className="rounded-lg bg-zinc-50 border border-zinc-200 p-2.5 text-xs text-zinc-600 flex items-start gap-2">
               <Info className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
               <p className="text-[11px] leading-relaxed">
-                Adding an office asks only that office; a request already with the HoD returns to department review.
+                Adding a facility asks only that office; a request already with the HoD returns to department review.
               </p>
             </div>
           </div>
@@ -1054,21 +1065,21 @@ export function StudentDashboard() {
               onClick={handleConfirmAddDepartment}
               className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 font-semibold"
             >
-              {addOfficeSubmitting ? 'Adding...' : 'Add Office'}
+              {addOfficeSubmitting ? 'Adding...' : 'Add Facility'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Dialog: Add Lab Subjects */}
+      {/* Dialog: Add a Lab or Workshop */}
       <Dialog open={addLabsOpen} onOpenChange={setAddLabsOpen}>
         <DialogContent className="sm:max-w-lg bg-white p-6 max-h-[85vh] flex flex-col">
           <DialogHeader className="pb-3">
             <DialogTitle className="font-heading font-bold text-base">
-              Add Lab & Workshop Subjects
+              Add a Lab or Workshop
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Select additional lab courses to add to your clearance declarations.
+              Select additional laboratory subjects or workshops to add to your clearance declarations.
             </DialogDescription>
           </DialogHeader>
 
@@ -1080,14 +1091,17 @@ export function StudentDashboard() {
               </p>
             </div>
 
-            {(!labCatalogData || !labCatalogData.courses || labCatalogData.courses.length === 0) ? (
+            {(!labCatalogData || !(labCatalogData.lab_courses || labCatalogData.courses) || (labCatalogData.lab_courses || labCatalogData.courses).length === 0) ? (
               <p className="text-xs text-zinc-500 italic py-4 text-center">
                 No lab courses cataloged for your academic programme.
               </p>
             ) : (
               <div className="space-y-2">
-                {labCatalogData.courses.map((course) => {
+                {(labCatalogData.lab_courses || labCatalogData.courses).map((course) => {
                   const isChecked = selectedLabIds.includes(course.id)
+                  const code = course.code || course.course_code
+                  const name = course.name || course.course_name
+                  const signingOffice = course.lab_department_name || course.signing_department_name
                   return (
                     <label
                       key={course.id}
@@ -1112,15 +1126,17 @@ export function StudentDashboard() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-mono font-semibold text-zinc-900">
-                            {course.course_code}
+                            {code}
                           </span>
                           <span className="font-medium text-zinc-800 truncate">
-                            {course.course_name}
+                            {name}
                           </span>
                         </div>
-                        <div className="text-[11px] text-zinc-500 mt-0.5">
-                          Signing Office: {course.signing_department_name} • Sem {course.semester}
-                        </div>
+                        {signingOffice && (
+                          <div className="text-[11px] text-zinc-500 mt-0.5">
+                            Signing Office: {signingOffice}
+                          </div>
+                        )}
                       </div>
                     </label>
                   )

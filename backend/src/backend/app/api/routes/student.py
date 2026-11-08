@@ -20,6 +20,7 @@ from backend.app.schemas.workflow import (
     DepartmentApprovalItem,
     DeclareLabCoursesRequest,
     StudentCancelRequest,
+    DepartmentResponse,
 )
 from backend.app.schemas.bank import BankDetailRead, BankDetailUpdate
 from backend.app.schemas.department import (
@@ -43,6 +44,7 @@ from backend.app.services.workflow import (
     resubmit_department,
     student_resubmit_to_hod,
     student_cancel_request,
+    active_officers_for,
 )
 from backend.app.services.certificate_pdf import generate_clearance_certificate_pdf
 
@@ -62,6 +64,8 @@ def _format_request_response(req: ClearanceRequest, db: SessionDep | None = None
             department_id=a.department_id,
             department_name=a.department.name if a.department else f"Department #{a.department_id}",
             department_kind=a.department.kind.value if a.department else "service",
+            department_category=a.department.category if a.department else None,
+            department_label=a.department.category_label if a.department else None,
             status=a.status,
             remarks=a.remarks,
             previous_remarks=a.previous_remarks,
@@ -116,7 +120,8 @@ class StudentClearanceApply(BaseModel):
     """Declarations submitted when applying for clearance."""
     is_hosteller: bool = Field(False, description="Declare whether student resided in university hostel")
     lab_course_ids: list[int] | None = Field(None, description="Declared lab course IDs (mapped to their lab offices)", examples=[[1, 2]])
-    other_department_ids: list[int] | None = Field(None, alias="other_office_ids", description="Optional list of additional ASSIGNED_ONLY department/office IDs", examples=[[26, 27]])
+    lab_workshop_department_ids: list[int] | None = Field(default_factory=list, description="Directly declared active Lab / Workshop department IDs", examples=[[5]])
+    other_department_ids: list[int] | None = Field(default_factory=list, alias="other_office_ids", description="Optional list of additional ASSIGNED_ONLY department/office IDs", examples=[[26, 27]])
     others_note: str | None = Field(None, max_length=1000, description="Optional note for any additional dues/facilities")
     bank: BankDetailUpdate | None = Field(None, description="Student refund bank details (if not already set)")
 
@@ -173,11 +178,13 @@ def apply_clearance(
 
     try:
         other_ids = body.other_department_ids if body else None
+        lab_workshop_ids = body.lab_workshop_department_ids if body else None
         req = create_request(
             session=db,
             student_user=student_user,
             declared_is_hosteller=bool(body.is_hosteller) if body else False,
             declared_lab_course_ids=body.lab_course_ids if body else None,
+            lab_workshop_department_ids=lab_workshop_ids,
             other_department_ids=other_ids,
             others_note=body.others_note if body else None,
         )
@@ -602,12 +609,14 @@ def get_student_lab_catalog(
 
     courses = db.execute(
         select(LabCourse)
+        .join(Department, LabCourse.lab_department_id == Department.id)
         .where(
             or_(
                 LabCourse.academic_department_id == academic_dept_id,
                 LabCourse.academic_department_id.is_(None),
             ),
             LabCourse.is_active == True,
+            Department.is_active == True,
         )
         .options(joinedload(LabCourse.lab_department))
         .order_by(LabCourse.code.asc())
@@ -621,15 +630,41 @@ def get_student_lab_catalog(
             lab_department_id=c.lab_department_id,
             lab_department_name=c.lab_department.name if c.lab_department else f"Department #{c.lab_department_id}",
             specialization=c.specialization,
+            category=c.lab_department.category if c.lab_department else "LAB_WORKSHOP",
+            label=c.lab_department.category_label if c.lab_department else "Lab / Workshop",
         )
         for c in courses
+    ]
+
+    direct_depts = db.execute(
+        select(Department)
+        .where(
+            Department.applicability == DepartmentApplicability.LAB_WORKSHOP,
+            Department.is_active == True,
+        )
+        .order_by(Department.name.asc())
+    ).scalars().all()
+
+    direct_items = [
+        DepartmentResponse(
+            id=d.id,
+            name=d.name,
+            kind=d.kind.value,
+            applicability=d.applicability.value,
+            description=d.description,
+            category=d.category,
+            label=d.category_label,
+            is_active=d.is_active,
+            has_active_officer=bool(active_officers_for(db, d.id)),
+        )
+        for d in direct_depts
     ]
 
     assigned_depts = db.execute(
         select(Department)
         .where(
             Department.applicability == DepartmentApplicability.ASSIGNED_ONLY,
-            Department.kind == DepartmentKind.service,
+            Department.is_active == True,
         )
         .order_by(Department.name.asc())
     ).scalars().all()
@@ -639,6 +674,10 @@ def get_student_lab_catalog(
             id=d.id,
             name=d.name,
             description=d.description,
+            category=d.category,
+            label=d.category_label,
+            is_active=d.is_active,
+            has_active_officer=bool(active_officers_for(db, d.id)),
         )
         for d in assigned_depts
     ]
@@ -646,6 +685,7 @@ def get_student_lab_catalog(
     return StudentLabCatalogResponse(
         lab_courses=catalog_items,
         assigned_only_departments=assigned_items,
+        direct_offices=direct_items,
     )
 
 

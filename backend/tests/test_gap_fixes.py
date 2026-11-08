@@ -221,7 +221,7 @@ def test_department_queue_hostel_and_others_note(client, db_session):
     assert q_hostel["total"] >= 1
     hostel_item = next(it for it in q_hostel["items"] if it["registration_number"] == roster.registration_number)
     assert hostel_item["declared_is_hosteller"] is True
-    assert hostel_item["others_note"] == "Special robotics equipment in workshop"
+    assert hostel_item["others_note"] is None
 
     # 4b. Library officer queue: declared_is_hosteller must be None, others_note must be present
     lib_officer = db_session.execute(
@@ -233,7 +233,7 @@ def test_department_queue_hostel_and_others_note(client, db_session):
     ).json()
     lib_item = next(it for it in q_lib["items"] if it["registration_number"] == roster.registration_number)
     assert lib_item["declared_is_hosteller"] is None
-    assert lib_item["others_note"] == "Special robotics equipment in workshop"
+    assert lib_item["others_note"] is None
 
     # 4c. Lab-1 officer queue: declared_is_hosteller is None, others_note must be None (linked to lab subject)
     lab1_officer = db_session.execute(
@@ -309,7 +309,7 @@ def test_department_requests_detail_scoping_and_unrelated_404(client, db_session
     lib_data = res_lib.json()
     assert lib_data["academic_department"] == "Skill Department of CS/IT"
     assert lib_data["declared_is_hosteller"] is None  # Not hostel office
-    assert lib_data["others_note"] == "General campus clearance note"
+    assert lib_data["others_note"] is None
     assert len(lib_data["approvals"]) == 1  # Only their own row
     assert lib_data["approvals"][0]["department_name"] == "Library"
     assert lib_data["can_add_departments"] == []  # Cannot add departments
@@ -475,7 +475,7 @@ def test_apply_other_offices_validation(client, db_session):
         headers=make_auth_headers(student.id),
     )
     assert res_lab_linked.status_code == 400
-    assert "linked to a lab subject" in res_lab_linked.json()["detail"].lower()
+    assert "only assigned_only" in res_lab_linked.json()["detail"].lower()
 
     # 7c. Reject if department has no active officer (Workshop-2)
     res_no_officer = client.post(

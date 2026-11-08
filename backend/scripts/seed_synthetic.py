@@ -519,7 +519,7 @@ def seed(session, staff_domain: str) -> list[str]:
         })
         staff_emails_created.append(email)
 
-    # Service dept officers for ASSIGNED_ONLY labs/workshops/others
+    # Service dept officers for ASSIGNED_ONLY (additional facilities: "Others")
     for dept_name, dept_id in assigned_dept_ids.items():
         slug = (
             dept_name.lower()

@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { adminApi } from '@/api/admin'
-import { departmentApi } from '@/api/department'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { AppShell } from '@/components/AppShell'
 import { DataTable } from '@/components/DataTable'
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog,
   DialogContent,
@@ -25,10 +26,15 @@ import {
   Edit,
   AlertTriangle,
   Download,
+  CheckCircle2,
+  RotateCw,
+  FileCheck2,
+  ArrowRight,
+  Power,
 } from 'lucide-react'
 
 export function AdminLabCoursesPage() {
-  useDocumentTitle('Master Lab Catalog (Fallback) | SVSU No-Dues')
+  useDocumentTitle('Master Lab Catalog | SVSU No-Dues')
   const queryClient = useQueryClient()
 
   const [viewMode, setViewMode] = useState('list') // 'list' or 'upload'
@@ -52,23 +58,38 @@ export function AdminLabCoursesPage() {
   const [createError, setCreateError] = useState('')
 
   const [editForm, setEditForm] = useState({
+    code: '',
     name: '',
+    lab_department_id: '',
     specialization: '',
     is_active: true,
   })
   const [editError, setEditError] = useState('')
 
-  // Fetch Departments
+  // Advanced CSV Upload States
+  const [uploadFile, setUploadFile] = useState(null)
+  const [checkingFile, setCheckingFile] = useState(false)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const [createMissingOffices, setCreateMissingOffices] = useState(false)
+  const [dryRunReport, setDryRunReport] = useState(null)
+  const [finalUploadReport, setFinalUploadReport] = useState(null)
+
+  // Fetch Academic Departments
   const { data: departments = [] } = useQuery({
     queryKey: ['departments'],
     queryFn: () => adminApi.getDepartments(),
   })
 
-  // Fetch Assigned-Only Service Lab Departments
-  const { data: assignedOnlyDepts = [] } = useQuery({
-    queryKey: ['departments', 'assigned-only'],
-    queryFn: () => departmentApi.getAssignedOnlyDepartments(),
+  // Fetch Lab / Workshop Offices (from getAdminDepartments or getAssignedOnlyDepartments)
+  const { data: adminDeptsData } = useQuery({
+    queryKey: ['admin', 'departments', 'all'],
+    queryFn: () => adminApi.getAdminDepartments(),
   })
+
+  const labWorkshopOffices = useMemo(() => {
+    const all = adminDeptsData?.items || []
+    return all.filter((d) => d.category === 'LAB_WORKSHOP' && d.is_active !== false)
+  }, [adminDeptsData])
 
   const academicDepartments = useMemo(
     () => departments.filter((d) => d.kind === 'academic'),
@@ -93,14 +114,18 @@ export function AdminLabCoursesPage() {
     ],
     queryFn: () =>
       adminApi.getLabCourses({
-        academic_department_id: academicDeptFilter,
-        is_active: activeFilter,
+        academic_department_id: academicDeptFilter === 'ALL' ? undefined : academicDeptFilter,
+        is_active: activeFilter === 'ALL' ? undefined : activeFilter === 'true',
         limit: pageSize,
         offset: pageIndex * pageSize,
       }),
   })
 
   const courses = useMemo(() => labCoursesData?.items || [], [labCoursesData?.items])
+
+  const invalidateAll = () => {
+    queryClient.invalidateQueries({ queryKey: ['admin', 'lab-courses'] })
+  }
 
   // Create Mutation
   const createMutation = useMutation({
@@ -116,7 +141,7 @@ export function AdminLabCoursesPage() {
         specialization: '',
       })
       setCreateError('')
-      queryClient.invalidateQueries({ queryKey: ['admin', 'lab-courses'] })
+      invalidateAll()
     },
     onError: (err) => {
       const msg = err.response?.data?.detail || 'Failed to create lab course.'
@@ -132,7 +157,7 @@ export function AdminLabCoursesPage() {
       toast.success('Lab course updated successfully.')
       setEditTarget(null)
       setEditError('')
-      queryClient.invalidateQueries({ queryKey: ['admin', 'lab-courses'] })
+      invalidateAll()
     },
     onError: (err) => {
       const msg = err.response?.data?.detail || 'Failed to update lab course.'
@@ -154,7 +179,7 @@ export function AdminLabCoursesPage() {
     }
 
     createMutation.mutate({
-      code: createForm.code.trim(),
+      code: createForm.code.trim().toUpperCase(),
       name: createForm.name.trim(),
       academic_department_id: Number(createForm.academic_department_id),
       lab_department_id: Number(createForm.lab_department_id),
@@ -168,7 +193,9 @@ export function AdminLabCoursesPage() {
     patchMutation.mutate({
       id: editTarget.id,
       data: {
+        code: editForm.code.trim().toUpperCase(),
         name: editForm.name.trim(),
+        lab_department_id: Number(editForm.lab_department_id),
         specialization: editForm.specialization.trim() || null,
         is_active: editForm.is_active,
       },
@@ -188,11 +215,76 @@ export function AdminLabCoursesPage() {
   const openEditDialog = (course) => {
     setEditTarget(course)
     setEditForm({
+      code: course.code,
       name: course.name,
+      lab_department_id: course.lab_department_id ? String(course.lab_department_id) : '',
       specialization: course.specialization || '',
       is_active: course.is_active,
     })
     setEditError('')
+  }
+
+  // Advanced CSV Handlers
+  const handleCheckFile = async () => {
+    if (!uploadFile) {
+      toast.error('Please select a CSV file first.')
+      return
+    }
+    setCheckingFile(true)
+    setDryRunReport(null)
+    setFinalUploadReport(null)
+    try {
+      const res = await adminApi.uploadLabCoursesCsv(uploadFile, {
+        dry_run: true,
+        create_missing_offices: createMissingOffices,
+      })
+      setDryRunReport(res)
+      toast.info(`Dry run complete: ${res.total_rows} rows analyzed.`)
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to simulate CSV upload.'
+      toast.error(msg)
+    } finally {
+      setCheckingFile(false)
+    }
+  }
+
+  const handleUploadFile = async () => {
+    if (!uploadFile) {
+      toast.error('Please select a CSV file first.')
+      return
+    }
+    setUploadingFile(true)
+    try {
+      const res = await adminApi.uploadLabCoursesCsv(uploadFile, {
+        dry_run: false,
+        create_missing_offices: createMissingOffices,
+      })
+      setFinalUploadReport(res)
+      setDryRunReport(null)
+      toast.success(`Upload complete: ${res.created_count} created, ${res.updated_count} updated.`)
+      invalidateAll()
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to batch upload lab courses.'
+      toast.error(msg)
+    } finally {
+      setUploadingFile(false)
+    }
+  }
+
+  const handleDownloadTemplate = async () => {
+    try {
+      const blob = await adminApi.downloadLabCoursesTemplate()
+      const url = window.URL.createObjectURL(new Blob([blob], { type: 'text/csv' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.setAttribute('download', 'master_lab_courses_template.csv')
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Failed to download template.')
+    }
   }
 
   // Columns
@@ -217,7 +309,7 @@ export function AdminLabCoursesPage() {
             </span>
             {row.original.specialization && (
               <span className="text-[11px] text-zinc-500">
-                Spec: {row.original.specialization}
+                Track: {row.original.specialization}
               </span>
             )}
           </div>
@@ -225,7 +317,7 @@ export function AdminLabCoursesPage() {
       },
       {
         accessorKey: 'academic_department_name',
-        header: 'Academic Faculty',
+        header: 'Academic Department',
         cell: ({ row }) => (
           <span className="text-xs text-zinc-700 max-w-[200px] line-clamp-1">
             {row.original.academic_department_name || '-'}
@@ -234,11 +326,11 @@ export function AdminLabCoursesPage() {
       },
       {
         accessorKey: 'lab_department_name',
-        header: 'Service Lab Office',
+        header: 'Signing Lab / Workshop',
         cell: ({ row }) => (
           <Badge
             variant="outline"
-            className="bg-indigo-50 text-indigo-800 border-indigo-200 text-[10px] font-mono"
+            className="bg-zinc-50 text-zinc-800 border-zinc-200 text-[10px] font-mono"
           >
             {row.original.lab_department_name || '-'}
           </Badge>
@@ -253,7 +345,7 @@ export function AdminLabCoursesPage() {
             className={
               row.original.is_active
                 ? 'bg-emerald-50 text-emerald-800 border-emerald-200 text-[10px]'
-                : 'bg-zinc-100 text-zinc-600 border-zinc-200 text-[10px]'
+                : 'bg-zinc-100 text-zinc-500 border-zinc-300 text-[10px]'
             }
           >
             {row.original.is_active ? 'Active' : 'Inactive'}
@@ -268,24 +360,25 @@ export function AdminLabCoursesPage() {
           return (
             <div className="flex items-center gap-1.5">
               <Button
-                size="sm"
                 variant="ghost"
+                size="sm"
                 onClick={() => openEditDialog(item)}
-                className="h-7 text-[11px] text-zinc-600 hover:text-black gap-1"
+                className="h-7 text-xs text-zinc-600 hover:text-black gap-1 px-2"
               >
-                <Edit className="w-3 h-3" />
+                <Edit className="w-3.5 h-3.5" />
                 Edit
               </Button>
               <Button
+                variant="ghost"
                 size="sm"
-                variant="outline"
                 onClick={() => handleToggleActive(item)}
-                className={`h-7 text-[11px] ${
+                className={`h-7 text-xs gap-1 px-2 ${
                   item.is_active
-                    ? 'hover:bg-rose-50 text-zinc-700 hover:text-rose-700 border-zinc-200'
-                    : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                    ? 'text-zinc-500 hover:text-rose-600'
+                    : 'text-emerald-700 hover:bg-emerald-50'
                 }`}
               >
+                <Power className="w-3.5 h-3.5" />
                 {item.is_active ? 'Deactivate' : 'Activate'}
               </Button>
             </div>
@@ -298,18 +391,18 @@ export function AdminLabCoursesPage() {
 
   return (
     <AppShell>
-      <div className="space-y-6">
-        {/* Header Strip */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border pb-5">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
+      <div className="space-y-6 max-w-7xl mx-auto pb-16">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-6">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
               <FlaskConical className="w-5 h-5 text-zinc-900" />
-              <h1 className="font-heading text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
-                Master Lab Catalog (Global Fallback)
+              <h1 className="font-heading text-2xl sm:text-3xl font-extrabold tracking-tight text-zinc-950">
+                Master Laboratory Catalog
               </h1>
             </div>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              Institutional directory mapping academic laboratory subjects to specialized service departments.
+            <p className="text-xs sm:text-sm text-zinc-500">
+              Centrally manage laboratory subjects and signing lab/workshop facilities across all university faculties.
             </p>
           </div>
 
@@ -320,7 +413,7 @@ export function AdminLabCoursesPage() {
               onClick={() => setViewMode('list')}
               className="text-xs h-9"
             >
-              Catalog Directory
+              Catalog View
             </Button>
             <Button
               variant={viewMode === 'upload' ? 'default' : 'outline'}
@@ -329,71 +422,327 @@ export function AdminLabCoursesPage() {
               className="text-xs h-9 gap-1.5"
             >
               <Upload className="w-3.5 h-3.5" />
-              CSV Ingestion
+              Batch Ingest
             </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                setCreateError('')
-                setIsCreateOpen(true)
-              }}
-              className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-9 gap-1.5 font-semibold"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Create Lab Course
-            </Button>
+            {viewMode === 'list' && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setCreateError('')
+                  setCreateForm({
+                    code: '',
+                    name: '',
+                    academic_department_id: academicDepartments[0]?.id ? String(academicDepartments[0].id) : '',
+                    lab_department_id: labWorkshopOffices[0]?.id ? String(labWorkshopOffices[0].id) : '',
+                    specialization: '',
+                  })
+                  setIsCreateOpen(true)
+                }}
+                className="bg-black text-white hover:bg-zinc-800 text-xs h-9 gap-1.5 font-semibold shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Create Course
+              </Button>
+            )}
           </div>
         </div>
 
         {viewMode === 'upload' ? (
-          <div className="max-w-2xl mx-auto py-4 space-y-4">
-            <div className="p-6 rounded-xl border border-border bg-white shadow-card space-y-4">
-              <div className="space-y-1">
-                <h2 className="font-heading text-base font-bold text-zinc-900">
-                  Global Lab Catalog CSV Reference
-                </h2>
-                <p className="text-xs text-zinc-600 leading-relaxed">
-                  Bulk CSV ingestion of laboratory subjects is delegated directly to each respective Academic Department Officer (<span className="font-mono text-zinc-800 font-medium">/officer/lab-catalog</span>). Administrators provision and oversee courses across any academic department using the <strong>Create Lab Course</strong> dialog, or download the official template below.
-                </p>
-              </div>
+          /* CSV BATCH INGEST VIEW */
+          <Card className="border-border bg-white shadow-2xs">
+            <CardContent className="p-6 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-4">
+                <div>
+                  <h3 className="text-base font-bold text-zinc-950">
+                    Master Lab Courses CSV Upload
+                  </h3>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Batch upload laboratory subjects with automatic facility discovery. Format: code, name, lab_office, specialization.
+                  </p>
+                </div>
 
-              <div className="pt-2 flex items-center gap-3">
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={async () => {
-                    const blob = await adminApi.downloadLabCoursesTemplate()
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = 'lab_courses_template.csv'
-                    a.click()
-                    URL.revokeObjectURL(url)
-                    toast.success('Lab courses template downloaded.')
-                  }}
-                  className="text-xs gap-1.5 h-8 bg-white border-zinc-200"
+                  onClick={handleDownloadTemplate}
+                  className="text-xs gap-1.5 h-8 bg-zinc-50"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  Download Lab Courses Reference Template (CSV)
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setViewMode('list')
-                    setIsCreateOpen(true)
-                  }}
-                  className="bg-primary text-primary-foreground hover:bg-zinc-800 text-xs h-8 gap-1.5 font-semibold"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Create Lab Course
+                  Download CSV Template
                 </Button>
               </div>
-            </div>
-          </div>
+
+              {/* File picker */}
+              <div className="space-y-3">
+                <Label htmlFor="admin-lab-csv" className="text-xs font-semibold text-zinc-800">
+                  Select CSV File
+                </Label>
+                <Input
+                  id="admin-lab-csv"
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(e) => {
+                    setUploadFile(e.target.files?.[0] || null)
+                    setDryRunReport(null)
+                    setFinalUploadReport(null)
+                  }}
+                  className="text-xs cursor-pointer"
+                />
+              </div>
+
+              {/* Checkbox: Create missing labs and workshops */}
+              <div className="p-3.5 rounded-xl border border-zinc-200 bg-zinc-50/50 space-y-1">
+                <label className="flex items-start gap-2.5 cursor-pointer text-xs select-none">
+                  <input
+                    type="checkbox"
+                    checked={createMissingOffices}
+                    onChange={(e) => setCreateMissingOffices(e.target.checked)}
+                    className="mt-0.5 rounded border-zinc-300 text-black focus:ring-black h-4 w-4"
+                  />
+                  <div className="space-y-0.5">
+                    <span className="font-bold text-zinc-900 block">
+                      Create missing labs and workshops automatically
+                    </span>
+                    <span className="text-[11px] text-zinc-500 block leading-relaxed">
+                      When ticked, any laboratory or workshop facility named in the CSV that does not exist in the university directory will be automatically created under Labs & Workshops. Unticked by default to prevent accidental duplicates.
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Action Buttons: Check File (Dry Run) & Upload */}
+              <div className="flex items-center gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleCheckFile}
+                  disabled={!uploadFile || checkingFile || uploadingFile}
+                  className="text-xs h-9 gap-1.5 font-semibold"
+                >
+                  {checkingFile ? (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                      Checking file...
+                    </>
+                  ) : (
+                    <>
+                      <FileCheck2 className="w-3.5 h-3.5" />
+                      Check file (Dry Run)
+                    </>
+                  )}
+                </Button>
+
+                <Button
+                  type="button"
+                  onClick={handleUploadFile}
+                  disabled={!uploadFile || checkingFile || uploadingFile}
+                  className="bg-black text-white hover:bg-zinc-800 text-xs h-9 gap-1.5 font-semibold"
+                >
+                  {uploadingFile ? (
+                    <>
+                      <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-3.5 h-3.5" />
+                      Upload & Ingest
+                    </>
+                  )}
+                </Button>
+              </div>
+
+              {/* Dry Run Preview Report */}
+              {dryRunReport && (
+                <div className="p-4 rounded-xl border border-blue-200 bg-blue-50/40 space-y-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <FileCheck2 className="w-4 h-4 text-blue-700" />
+                    <span className="font-bold text-blue-950 text-sm">
+                      Pre-Upload Simulation Report
+                    </span>
+                    <Badge variant="outline" className="bg-blue-100 text-blue-900 border-blue-300 text-[10px] font-mono">
+                      DRY RUN PREVIEW
+                    </Badge>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                    <div className="p-2.5 bg-white rounded-lg border border-blue-100">
+                      <span className="text-[11px] text-zinc-500 block">Total Rows</span>
+                      <span className="font-bold text-sm font-mono text-zinc-900">{dryRunReport.total_rows}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-blue-100">
+                      <span className="text-[11px] text-zinc-500 block">New Subjects</span>
+                      <span className="font-bold text-sm font-mono text-emerald-700">+{dryRunReport.created_count}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-blue-100">
+                      <span className="text-[11px] text-zinc-500 block">Updated</span>
+                      <span className="font-bold text-sm font-mono text-blue-700">{dryRunReport.updated_count}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-blue-100">
+                      <span className="text-[11px] text-zinc-500 block">Rejected / Errors</span>
+                      <span className="font-bold text-sm font-mono text-rose-600">{dryRunReport.rejected_count}</span>
+                    </div>
+                  </div>
+
+                  {dryRunReport.offices_to_create && dryRunReport.offices_to_create.length > 0 && (
+                    <div className="p-3 bg-white rounded-lg border border-blue-200 space-y-1">
+                      <span className="font-semibold text-zinc-900 block">
+                        Labs and Workshops to be Created ({dryRunReport.offices_to_create.length}):
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {dryRunReport.offices_to_create.map((off, idx) => (
+                          <Badge key={idx} variant="outline" className="bg-blue-50 text-blue-900 border-blue-200 font-mono text-[10px]">
+                            {off}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Preview Rows Table */}
+                  {dryRunReport.rows && dryRunReport.rows.length > 0 && (
+                    <div className="max-h-[200px] overflow-y-auto border border-blue-200 rounded-lg bg-white">
+                      <table className="w-full text-left text-[11px]">
+                        <thead className="bg-zinc-50 border-b text-zinc-600">
+                          <tr>
+                            <th className="p-2">Row</th>
+                            <th className="p-2">Code</th>
+                            <th className="p-2">Status</th>
+                            <th className="p-2">Details</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-100">
+                          {dryRunReport.rows.map((r) => (
+                            <tr key={r.row_number}>
+                              <td className="p-2 font-mono text-zinc-500">#{r.row_number}</td>
+                              <td className="p-2 font-mono font-semibold text-zinc-900">{r.code}</td>
+                              <td className="p-2">
+                                <Badge
+                                  variant="outline"
+                                  className={`text-[9px] ${
+                                    r.status === 'created'
+                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                      : r.status === 'updated'
+                                      ? 'bg-blue-50 text-blue-800 border-blue-200'
+                                      : 'bg-rose-50 text-rose-800 border-rose-200'
+                                  }`}
+                                >
+                                  {r.status}
+                                </Badge>
+                              </td>
+                              <td className="p-2 text-zinc-600">{r.reason || 'OK'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Final Real Upload Report */}
+              {finalUploadReport && (
+                <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/40 space-y-4 text-xs">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                    <span className="font-bold text-emerald-950 text-sm">
+                      Batch Ingestion Completed
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-100">
+                      <span className="text-[11px] text-zinc-500 block">Total Rows</span>
+                      <span className="font-bold text-sm font-mono text-zinc-900">{finalUploadReport.total_rows}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-100">
+                      <span className="text-[11px] text-zinc-500 block">Created</span>
+                      <span className="font-bold text-sm font-mono text-emerald-700">+{finalUploadReport.created_count}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-100">
+                      <span className="text-[11px] text-zinc-500 block">Updated</span>
+                      <span className="font-bold text-sm font-mono text-blue-700">{finalUploadReport.updated_count}</span>
+                    </div>
+                    <div className="p-2.5 bg-white rounded-lg border border-emerald-100">
+                      <span className="text-[11px] text-zinc-500 block">Rejected</span>
+                      <span className="font-bold text-sm font-mono text-rose-600">{finalUploadReport.rejected_count}</span>
+                    </div>
+                  </div>
+
+                  {/* Created Offices */}
+                  {finalUploadReport.offices_to_create && finalUploadReport.offices_to_create.length > 0 && (
+                    <div className="p-3 bg-white rounded-lg border border-emerald-200 space-y-1">
+                      <span className="font-semibold text-zinc-900 block">
+                        Newly Created Laboratories & Workshops:
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {finalUploadReport.offices_to_create.map((off, idx) => (
+                          <Badge key={idx} variant="outline" className="bg-emerald-50 text-emerald-900 border-emerald-200 font-mono text-[10px]">
+                            {off}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Offices Changed per Subject */}
+                  {finalUploadReport.rows && finalUploadReport.rows.filter((r) => r.status === 'updated' && r.reason?.includes('office changed')).length > 0 && (
+                    <div className="p-3 bg-white rounded-lg border border-blue-200 space-y-1.5">
+                      <span className="font-semibold text-zinc-900 block">
+                        Office Reassignments:
+                      </span>
+                      <div className="space-y-1">
+                        {finalUploadReport.rows
+                          .filter((r) => r.status === 'updated' && r.reason?.includes('office changed'))
+                          .map((r) => (
+                            <div key={r.row_number} className="text-[11px] flex items-center gap-2">
+                              <span className="font-mono font-bold text-zinc-900">{r.code}:</span>
+                              <span className="text-zinc-600">{r.reason}</span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Warning List: Offices without an assigned officer */}
+                  {finalUploadReport.offices_without_officers && finalUploadReport.offices_without_officers.length > 0 && (
+                    <div className="p-3.5 rounded-lg bg-amber-50 border border-amber-200 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-700" />
+                        <span className="font-bold text-amber-950">
+                          Offices Without an Assigned Dealing Officer
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-amber-900">
+                        The following offices are referenced by subjects but do not have an active dealing officer to sign clearances:
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {finalUploadReport.offices_without_officers.map((off, idx) => (
+                          <Badge key={idx} variant="outline" className="bg-white border-amber-300 text-amber-900 text-[10px]">
+                            {off}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="pt-1">
+                        <Link
+                          to="/admin/offices"
+                          className="text-xs font-semibold text-amber-950 underline hover:text-black inline-flex items-center gap-1"
+                        >
+                          Go to Offices & Staffing to assign officers
+                          <ArrowRight className="w-3 h-3" />
+                        </Link>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         ) : (
+          /* CATALOG LIST VIEW */
           <div className="space-y-4">
-            {/* Filter Toolbar */}
-            <div className="flex items-center gap-2 bg-zinc-50/80 p-3 rounded-xl border border-border flex-wrap">
+            {/* Filter Bar */}
+            <div className="flex flex-wrap items-center gap-3">
               <select
                 value={academicDeptFilter}
                 onChange={(e) => {
@@ -402,7 +751,7 @@ export function AdminLabCoursesPage() {
                 }}
                 className="h-9 rounded-md border border-input bg-white px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
-                <option value="ALL">All Academic Faculties</option>
+                <option value="ALL">All Academic Departments</option>
                 {academicDepartments.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name}
@@ -484,7 +833,7 @@ export function AdminLabCoursesPage() {
                 Create Lab Course (Global)
               </DialogTitle>
               <DialogDescription className="text-xs">
-                Map a teaching curriculum lab subject to an ASSIGNED_ONLY service department.
+                Map a teaching curriculum lab subject to a signing lab/workshop facility.
               </DialogDescription>
             </DialogHeader>
 
@@ -498,7 +847,7 @@ export function AdminLabCoursesPage() {
             <div className="space-y-3.5 py-4 text-xs">
               <div className="space-y-1.5">
                 <Label htmlFor="acadDept" className="text-xs font-semibold text-zinc-800">
-                  Academic Faculty
+                  Academic Department <span className="text-rose-500">*</span>
                 </Label>
                 <select
                   id="acadDept"
@@ -520,7 +869,7 @@ export function AdminLabCoursesPage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="serviceLab" className="text-xs font-semibold text-zinc-800">
-                  Signing Service Lab (ASSIGNED_ONLY)
+                  Signing Lab / Workshop Office <span className="text-rose-500">*</span>
                 </Label>
                 <select
                   id="serviceLab"
@@ -531,8 +880,8 @@ export function AdminLabCoursesPage() {
                   className="w-full h-9 rounded-md border border-input bg-white px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                   required
                 >
-                  <option value="">Select Assigned-Only Service Lab...</option>
-                  {assignedOnlyDepts.map((d) => (
+                  <option value="">Select Signing Laboratory / Workshop...</option>
+                  {labWorkshopOffices.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name} (ID: {d.id})
                     </option>
@@ -543,7 +892,7 @@ export function AdminLabCoursesPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="cCode" className="text-xs font-semibold text-zinc-800">
-                    Subject Code
+                    Subject Code <span className="text-rose-500">*</span>
                   </Label>
                   <Input
                     id="cCode"
@@ -575,7 +924,7 @@ export function AdminLabCoursesPage() {
 
               <div className="space-y-1.5">
                 <Label htmlFor="cName" className="text-xs font-semibold text-zinc-800">
-                  Subject Title
+                  Subject Title <span className="text-rose-500">*</span>
                 </Label>
                 <Input
                   id="cName"
@@ -611,7 +960,7 @@ export function AdminLabCoursesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* EDIT MODAL */}
+      {/* EDIT MODAL (code, name, office searchable select, specialization, active) */}
       <Dialog
         open={Boolean(editTarget)}
         onOpenChange={(open) => {
@@ -628,7 +977,7 @@ export function AdminLabCoursesPage() {
                 Edit Lab Course
               </DialogTitle>
               <DialogDescription className="text-xs">
-                Update details for <strong className="text-zinc-900">{editTarget?.code}</strong>.
+                Update course code, title, and assigned signing lab office.
               </DialogDescription>
             </DialogHeader>
 
@@ -641,8 +990,21 @@ export function AdminLabCoursesPage() {
 
             <div className="space-y-3.5 py-4 text-xs">
               <div className="space-y-1.5">
+                <Label htmlFor="editCode" className="text-xs font-semibold text-zinc-800">
+                  Course Code <span className="text-rose-500">*</span>
+                </Label>
+                <Input
+                  id="editCode"
+                  value={editForm.code}
+                  onChange={(e) => setEditForm({ ...editForm, code: e.target.value.toUpperCase() })}
+                  className="font-mono text-xs uppercase"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
                 <Label htmlFor="editName" className="text-xs font-semibold text-zinc-800">
-                  Subject Title
+                  Subject Title <span className="text-rose-500">*</span>
                 </Label>
                 <Input
                   id="editName"
@@ -651,6 +1013,26 @@ export function AdminLabCoursesPage() {
                   className="text-xs"
                   required
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="editLabOffice" className="text-xs font-semibold text-zinc-800">
+                  Signing Lab / Workshop Office <span className="text-rose-500">*</span>
+                </Label>
+                <select
+                  id="editLabOffice"
+                  value={editForm.lab_department_id}
+                  onChange={(e) => setEditForm({ ...editForm, lab_department_id: e.target.value })}
+                  className="w-full h-9 rounded-md border border-input bg-white px-3 py-1 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  required
+                >
+                  <option value="">Select Signing Laboratory / Workshop...</option>
+                  {labWorkshopOffices.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} (ID: {d.id})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="space-y-1.5">

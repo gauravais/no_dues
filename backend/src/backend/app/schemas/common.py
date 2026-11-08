@@ -17,4 +17,7 @@ class DepartmentBrief(BaseModel):
     id: int = Field(..., description="Department ID", examples=[1])
     name: str = Field(..., description="Department name", examples=["Skill Department of CS/IT"])
     kind: str = Field(..., description="Department kind: academic or service", examples=["academic"])
+    category: str | None = Field(None, description="Computed category", examples=["ACADEMIC"])
+    label: str | None = Field(None, description="Human-readable category label", examples=["Academic department"])
+    is_active: bool = Field(True, description="Whether department is active")
 

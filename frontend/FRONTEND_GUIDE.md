@@ -102,10 +102,11 @@ frontend/
 │   │   │   ├── RegistrarRefundPage.jsx       # Cleared queue, deduction calculator, payment ref
 │   │   │   └── RegistrarRequestDetailPage.jsx # Financial audit, roster provenance, 30s bank reveal
 │   │   └── admin/
-│   │       ├── AdminOfficesPage.jsx       # Department staffing dashboard & staffing gaps
-│   │       ├── AdminUsersPage.jsx         # User directory, provisioning, bulk upload, passwords
+│   │       ├── AdminOfficesPage.jsx       # Department staffing dashboard, 5 category tabs, bulk type change
+│   │       ├── AdminAcademicStructurePage.jsx # Faculties, academic departments & programmes management
+│   │       ├── AdminUsersPage.jsx         # User directory, provisioning, bulk upload, edit profile & unlink Google
 │   │       ├── AdminRosterPage.jsx        # Master roster fallback & CSV ingestion
-│   │       └── AdminLabCoursesPage.jsx    # Master lab courses catalog & CSV ingestion
+│   │       └── AdminLabCoursesPage.jsx    # Master lab courses catalog & dry-run CSV ingestion
 │   ├── App.jsx                   # React Router, ErrorBoundary & TanStack Query root provider
 │   ├── index.css                 # Minimalist white theme tokens & animations
 │   └── main.jsx                  # Entrypoint with Syne & Inter font imports
@@ -195,17 +196,17 @@ frontend/
 
 ### G. Student Clearance & 5-Step Application Wizard (`/student/apply` & `/student`)
 - **Declaration-Driven Clearance**:
-  - Clearance departments are declared by the student: hostel residency, lab/workshop courses from the departmental catalog, and additional assigned-only offices.
+  - Clearance departments are declared by the student: hostel residency, lab/workshop courses from the departmental catalog or fallback direct selection, and optional additional facilities with notes.
 - **5-Step Application Wizard (`/student/apply`)**:
   - **Step 1 (Bank Details)**: Validates Indian bank account, IFSC code, beneficiary name, and branch address (`PUT /student/bank-details`).
   - **Step 2 (Residence Status)**: Radio cards for Hosteller vs Day Scholar (`is_hosteller`).
-  - **Step 3 (Labs & Workshops)**: Dynamically fetches student's academic lab catalog (`GET /student/lab-catalog`). Features live search filter, course details, and removable summary chips.
-  - **Step 4 (Other Offices & Notes)**: Fetches assigned-only departments (`GET /departments/assigned-only`) and provides an optional note textarea.
-  - **Step 5 (Review & Submission)**: Unified declaration summary card. Requires explicit confirmation checkbox before invoking `POST /student/requests`.
+  - **Step 3 (Labs & Workshops)**: Dynamically fetches student's academic lab catalog (`GET /student/lab-catalog`). Features live search filter, course details, removable summary chips, plus a collapsible "My lab or workshop is not listed" multi-select of direct lab/workshop offices sent as `lab_workshop_department_ids`.
+  - **Step 4 (Additional Facilities & Notes)**: Fetches additional facilities (`GET /departments/additional-facilities`), presents searchable multi-select with note field, and guidance: *"Only add a facility you actually used, for example Others."*
+  - **Step 5 (Review & Submission)**: Unified declaration summary card grouping attended labs/workshops and additional facilities. Requires explicit confirmation checkbox before invoking `POST /student/requests`.
 - **Student Dashboard Enhancements (`/student`)**:
-  - Clearance cards displaying status, remarks, rejection history, declared subjects, and `added_reason` banners.
+  - Department approval cards displaying category badges, status, remarks, rejection history, declared subjects, and `added_reason` banners.
   - Targeted resubmission for rejected departments.
-  - "Add More" panel for supplemental assigned offices (`POST /student/requests/{id}/departments`) and lab subjects (`POST /student/requests/{id}/lab-courses`).
+  - "Add More" panel featuring two distinct actions: "Add a lab or workshop" (`POST /student/requests/{id}/departments` or lab-courses) and "Add an additional facility".
   - Digital Certificate download (`GET /student/requests/{id}/certificate.pdf`).
 
 ---

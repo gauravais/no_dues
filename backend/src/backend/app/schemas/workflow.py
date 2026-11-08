@@ -12,6 +12,8 @@ class DepartmentApprovalItem(BaseModel):
     department_id: int = Field(..., description="Department ID", examples=[1])
     department_name: str = Field(..., description="Department title", examples=["Library"])
     department_kind: str = Field(..., description="Department category: academic or service", examples=["service"])
+    department_category: str | None = Field(None, description="Department computed category", examples=["UNIVERSITY_OFFICE"])
+    department_label: str | None = Field(None, description="Department human-readable category label", examples=["University office"])
     status: ApprovalStatus = Field(..., description="Current approval status", examples=[ApprovalStatus.PENDING])
     remarks: str | None = Field(None, description="Department officer remarks (mandatory on rejection)", examples=["Fine pending: Rs. 150"])
     previous_remarks: str | None = Field(None, description="Previous rejection reason before student resubmitted", examples=["Fine pending: Rs. 150"])
@@ -103,6 +105,10 @@ class DepartmentResponse(BaseModel):
     kind: str = Field(..., description="Department kind: academic or service", examples=["service"])
     applicability: str = Field(..., description="Applicability rule", examples=["ALWAYS"])
     description: str | None = Field(None, description="Department description or location")
+    category: str = Field(..., description="Computed category: ACADEMIC, UNIVERSITY_OFFICE, HOSTEL, LAB_WORKSHOP, ADDITIONAL_FACILITY", examples=["UNIVERSITY_OFFICE"])
+    label: str = Field(..., description="Human-readable category label", examples=["University office"])
+    is_active: bool = Field(True, description="Whether department is active")
+    has_active_officer: bool = Field(True, description="Whether department has at least one active dealing officer")
 
 
 class HoDRequestDetailResponse(BaseModel):

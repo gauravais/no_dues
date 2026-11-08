@@ -2,14 +2,26 @@
 import os
 
 # If local .env was moved to secure storage outside repo, load it for test runner
+_local_env = ".env" if os.path.exists(".env") else ("backend/.env" if os.path.exists("backend/.env") else None)
 _secure_env = os.path.expanduser(r"~\.nodues_secure\backend.env")
-if not os.path.exists(".env") and os.path.exists(_secure_env):
-    with open(_secure_env, "r", encoding="utf-8") as _f:
+if _local_env:
+    with open(_local_env, "r", encoding="utf-8") as _f:
         for _line in _f:
             _line = _line.strip()
             if _line and not _line.startswith("#") and "=" in _line:
                 _k, _v = _line.split("=", 1)
                 os.environ.setdefault(_k.strip(), _v.strip())
+else:
+    try:
+        if os.path.exists(_secure_env):
+            with open(_secure_env, "r", encoding="utf-8") as _f:
+                for _line in _f:
+                    _line = _line.strip()
+                    if _line and not _line.startswith("#") and "=" in _line:
+                        _k, _v = _line.split("=", 1)
+                        os.environ.setdefault(_k.strip(), _v.strip())
+    except Exception:
+        pass
 
 import psycopg
 from psycopg import sql
@@ -190,20 +202,27 @@ def _seed_test_structure(session):
     )
     session.add(hostel_dept)
 
-    # Service Departments: ASSIGNED_ONLY
+    # Service Departments: LAB_WORKSHOP
     lab1_dept = Department(
         name="Lab-1",
         kind=DepartmentKind.service,
-        applicability=DepartmentApplicability.ASSIGNED_ONLY,
+        applicability=DepartmentApplicability.LAB_WORKSHOP,
         faculty_id=None,
     )
     lab2_dept = Department(
         name="Lab-2",
         kind=DepartmentKind.service,
+        applicability=DepartmentApplicability.LAB_WORKSHOP,
+        faculty_id=None,
+    )
+    # Service Departments: ASSIGNED_ONLY (additional facility)
+    others_dept = Department(
+        name="Others",
+        kind=DepartmentKind.service,
         applicability=DepartmentApplicability.ASSIGNED_ONLY,
         faculty_id=None,
     )
-    session.add_all([lab1_dept, lab2_dept])
+    session.add_all([lab1_dept, lab2_dept, others_dept])
     session.flush()
 
     # Staff, HoD, Registrar & Admin Users

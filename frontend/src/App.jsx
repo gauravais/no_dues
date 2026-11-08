@@ -29,6 +29,7 @@ const HodRequestDetailPage = lazy(() => import('@/pages/hod/HodRequestDetailPage
 const RegistrarRefundPage = lazy(() => import('@/pages/registrar/RegistrarRefundPage'))
 const RegistrarRequestDetailPage = lazy(() => import('@/pages/registrar/RegistrarRequestDetailPage'))
 const AdminOfficesPage = lazy(() => import('@/pages/admin/AdminOfficesPage'))
+const AdminAcademicStructurePage = lazy(() => import('@/pages/admin/AdminAcademicStructurePage'))
 const AdminUsersPage = lazy(() => import('@/pages/admin/AdminUsersPage'))
 const AdminRosterPage = lazy(() => import('@/pages/admin/AdminRosterPage'))
 const AdminLabCoursesPage = lazy(() => import('@/pages/admin/AdminLabCoursesPage'))
@@ -186,6 +187,18 @@ export default function App() {
                       <AdminOfficesPage />
                     </ProtectedRoute>
                   }
+                />
+                <Route
+                  path="/admin/structure"
+                  element={
+                    <ProtectedRoute allowedRoles={['admin']}>
+                      <AdminAcademicStructurePage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/admin/academic-structure"
+                  element={<Navigate to="/admin/structure" replace />}
                 />
                 <Route
                   path="/admin/users"

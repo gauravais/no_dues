@@ -99,6 +99,7 @@ export function AppShell({ children }) {
         ...(isAdmin
           ? [
               { label: 'Offices & Staffing', path: '/admin/offices' },
+              { label: 'Academic Structure', path: '/admin/structure' },
               { label: 'Staff Directory', path: '/admin/users' },
               { label: 'Master Roster', path: '/admin/roster' },
               { label: 'Lab Catalog', path: '/admin/lab-courses' },

@@ -395,7 +395,7 @@ def test_18_admin_roster_patch_and_assigned_departments(client: TestClient, db_s
 
     # 2. PUT assigned departments
     lab_depts = db.execute(
-        select(Department).where(Department.applicability == "ASSIGNED_ONLY")
+        select(Department).where(Department.applicability.in_(["ASSIGNED_ONLY", "LAB_WORKSHOP"]))
     ).scalars().all()
     assigned_ids = [lab_depts[0].id, lab_depts[1].id]
 

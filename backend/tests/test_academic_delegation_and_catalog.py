@@ -14,7 +14,7 @@ from backend.app.models.university import (
     DepartmentKind,
     DepartmentApplicability,
 )
-from backend.app.models.user import User, UserRole
+from backend.app.models.user import User, UserRole, UserDepartment
 from backend.app.models.roster import StudentRoster, RosterAssignedDepartment
 from backend.app.models.lab_course import LabCourse
 from backend.app.models.bank import BankDetail
@@ -302,7 +302,7 @@ def test_academic_lab_catalog_scoping_and_upload(client, db_session):
         },
     )
     assert resp.status_code == 400
-    assert "ASSIGNED_ONLY" in resp.json()["detail"]
+    assert "LAB_WORKSHOP" in resp.json()["detail"] or "Lab / Workshop" in resp.json()["detail"]
 
     # 4. Upload CSV
     csv_data = (
@@ -521,7 +521,8 @@ def test_student_catalog_and_add_department(client, db_session):
     resp = client.get("/departments/assigned-only", headers=headers)
     assert resp.status_code == 200
     assigned_depts = resp.json()
-    assert any(d["name"] == "Lab-1" for d in assigned_depts)
+    assert any(d["name"] == "Others" for d in assigned_depts)
+    assert any(d["name"] == "Lab-1" for d in data.get("direct_offices", []))
 
     # 3. Apply for clearance
     resp = client.post("/student/requests", headers=headers)
@@ -547,3 +548,101 @@ def test_student_catalog_and_add_department(client, db_session):
     )
     assert resp.status_code == 409
     assert "already part of this clearance request" in resp.json()["detail"]
+
+
+def test_student_lab_catalog_has_active_officer_flag(client, db_session: Session):
+    """
+    Verifies that GET /student/lab-catalog returns has_active_officer (bool) on all
+    direct_offices and assigned_only_departments, accurately reflecting whether
+    an active dealing officer is assigned to that office.
+    """
+    student_user, _ = _setup_student_with_bank(db_session, "2026TEST_ACT", "student.active_flag@example.edu")
+    headers = make_auth_headers(student_user.id)
+
+    # 1. Create an unstaffed lab/workshop department
+    unstaffed_lab = Department(
+        name="Robotics Workshop Unstaffed",
+        kind=DepartmentKind.service,
+        applicability=DepartmentApplicability.LAB_WORKSHOP,
+        description="Autonomous Systems Workshop",
+        is_active=True,
+    )
+    db_session.add(unstaffed_lab)
+
+    # 2. Create an unstaffed additional facility
+    unstaffed_facility = Department(
+        name="Innovation Incubation Facility Unstaffed",
+        kind=DepartmentKind.service,
+        applicability=DepartmentApplicability.ASSIGNED_ONLY,
+        description="Center for Incubation",
+        is_active=True,
+    )
+    db_session.add(unstaffed_facility)
+    db_session.commit()
+    db_session.refresh(unstaffed_lab)
+    db_session.refresh(unstaffed_facility)
+
+    # 3. GET /student/lab-catalog
+    resp = client.get("/student/lab-catalog", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Verify all direct_offices have has_active_officer as bool
+    assert len(data["direct_offices"]) > 0
+    for d in data["direct_offices"]:
+        assert "has_active_officer" in d
+        assert isinstance(d["has_active_officer"], bool)
+
+    # Verify all assigned_only_departments have has_active_officer as bool
+    assert len(data["assigned_only_departments"]) > 0
+    for d in data["assigned_only_departments"]:
+        assert "has_active_officer" in d
+        assert isinstance(d["has_active_officer"], bool)
+
+    # Verify unstaffed lab has has_active_officer == False
+    matched_lab = next((d for d in data["direct_offices"] if d["id"] == unstaffed_lab.id), None)
+    assert matched_lab is not None
+    assert matched_lab["has_active_officer"] is False
+
+    # Verify unstaffed facility has has_active_officer == False
+    matched_facility = next((d for d in data["assigned_only_departments"] if d["id"] == unstaffed_facility.id), None)
+    assert matched_facility is not None
+    assert matched_facility["has_active_officer"] is False
+
+    # 4. Now create an active officer and assign to the unstaffed lab
+    officer = User(
+        email="robotics.officer@svsu.ac.in",
+        full_name="Robotics Lab In-charge",
+        role=UserRole.dept_officer,
+        department_id=unstaffed_lab.id,
+        is_active=True,
+    )
+    db_session.add(officer)
+    db_session.commit()
+    db_session.refresh(officer)
+
+    # Assign membership
+    membership = UserDepartment(user_id=officer.id, department_id=unstaffed_lab.id)
+    db_session.add(membership)
+    db_session.commit()
+
+    # 5. GET /student/lab-catalog again
+    resp2 = client.get("/student/lab-catalog", headers=headers)
+    assert resp2.status_code == 200
+    data2 = resp2.json()
+
+    matched_lab2 = next((d for d in data2["direct_offices"] if d["id"] == unstaffed_lab.id), None)
+    assert matched_lab2 is not None
+    assert matched_lab2["has_active_officer"] is True
+
+    # 6. Deactivate officer -> has_active_officer should become False
+    officer.is_active = False
+    db_session.commit()
+
+    resp3 = client.get("/student/lab-catalog", headers=headers)
+    assert resp3.status_code == 200
+    data3 = resp3.json()
+    matched_lab3 = next((d for d in data3["direct_offices"] if d["id"] == unstaffed_lab.id), None)
+    assert matched_lab3 is not None
+    assert matched_lab3["has_active_officer"] is False
+

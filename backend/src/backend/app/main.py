@@ -120,6 +120,7 @@ app.include_router(verify.router)
 app.include_router(registrar.router)
 app.include_router(admin.router)
 app.include_router(departments.router)
+app.include_router(departments.programmes_router)
 app.include_router(internal_jobs.router)
 
 
