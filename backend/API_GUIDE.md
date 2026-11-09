@@ -155,7 +155,7 @@ When deployed with `APP_ENV=production`, the application refuses to start and ra
 
 ### A. Academic Department Student Roster CSV
 - **Endpoint**: `POST /department/roster/upload` (Academic officers) or `POST /admin/roster/upload` (Admin fallback).
-- **Header row**: `registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount`
+- **Header row**: `registration_number,name,email,mobile,address,programme,is_hosteller`
 
 | Column | Type | Constraints / Description | Sample Value |
 |---|---|---|---|
@@ -166,7 +166,8 @@ When deployed with `APP_ENV=production`, the application refuses to start and ra
 | `address` | String | Home or correspondence address | `Campus Hostels, SVSU Palwal` |
 | `programme` | String / Int | Programme name or ID (must belong to officer's academic department) | `Bachelor of Technology (B.Tech.) Computer Engineering` |
 | `is_hosteller` | Boolean | `true`/`false`, `1`/`0`, `yes`/`no` (roster baseline) | `true` |
-| `security_deposit_amount` | Decimal | Non-negative caution deposit amount | `5000.00` |
+
+*Note: Security deposit amounts are managed exclusively by Accounts (via the deposit ledger) and cannot be modified by department officers or administrators. Any deposit columns or values provided in roster uploads or edits are safely ignored.*
 
 ### B. Lab & Workshop Catalog CSV
 - **Endpoint**: `POST /department/lab-courses/upload`

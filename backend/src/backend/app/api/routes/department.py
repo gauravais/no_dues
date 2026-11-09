@@ -83,7 +83,7 @@ router = APIRouter(prefix="/department", tags=["Department Officer"])
 require_officer = require_roles(UserRole.dept_officer)
 
 
-def _format_roster_item(r: StudentRoster) -> DepartmentRosterItem:
+def _format_roster_item(r: StudentRoster, message: str | None = None) -> DepartmentRosterItem:
     return DepartmentRosterItem(
         id=r.id,
         registration_number=r.registration_number,
@@ -97,6 +97,7 @@ def _format_roster_item(r: StudentRoster) -> DepartmentRosterItem:
         security_deposit_amount=r.security_deposit_amount,
         has_user_account=bool(r.user),
         assigned_department_ids=[d.department_id for d in r.assigned_departments] if r.assigned_departments else [],
+        message=message,
     )
 
 
@@ -651,8 +652,8 @@ def get_department_roster_template(
     current_user: User = Depends(require_academic_officer),
 ) -> Response:
     csv_content = (
-        "registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\r\n"
-        "2026CS901,Sample Student,sample.student@example.edu,9876543210,Campus Hostels,B.Tech Computer Engineering,false,5000.00\r\n"
+        "registration_number,name,email,mobile,address,programme,is_hosteller\r\n"
+        "2026CS901,Sample Student,sample.student@example.edu,9876543210,Campus Hostels,B.Tech Computer Engineering,false\r\n"
     )
     return Response(
         content=csv_content,
@@ -715,6 +716,7 @@ async def upload_department_roster_csv(
     prog_by_name = {p.name.strip().lower(): p for p in dept_progs}
     prog_by_id = {p.id: p for p in dept_progs}
 
+    has_deposit_col = "security_deposit_amount" in fieldnames_map
 
     row_reports: list[RosterUploadRowReport] = []
     created_count = 0
@@ -730,7 +732,6 @@ async def upload_department_roster_csv(
         address = (row.get(fieldnames_map.get("address", "")) or "").strip()
         prog_str = (row.get(fieldnames_map["programme"]) or "").strip()
         hosteller_str = (row.get(fieldnames_map.get("is_hosteller", "")) or "").strip().lower()
-        deposit_str = (row.get(fieldnames_map.get("security_deposit_amount", "")) or "").strip()
 
         if not reg_num:
             row_reports.append(RosterUploadRowReport(row_number=idx, registration_number="UNKNOWN", status="rejected", reason="Registration number cannot be empty"))
@@ -771,14 +772,6 @@ async def upload_department_roster_csv(
             continue
 
         is_hosteller = hosteller_str in ("true", "1", "yes", "y", "t")
-        try:
-            deposit_amt = Decimal(deposit_str) if deposit_str else Decimal("0.00")
-            if deposit_amt < 0:
-                raise ValueError()
-        except (InvalidOperation, ValueError):
-            row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason="Invalid deposit amount"))
-            rejected_count += 1
-            continue
 
         # Check existing student
         existing = db.execute(
@@ -836,8 +829,7 @@ async def upload_department_roster_csv(
             existing.programme_id = matched_prog.id
             if hosteller_str:
                 existing.is_hosteller = is_hosteller
-            if deposit_str:
-                existing.security_deposit_amount = deposit_amt
+            # Security deposit is managed exclusively by Accounts; never overwrite existing value
             existing.updated_by_user_id = current_user.id
 
             # Sync user full_name if exists
@@ -869,7 +861,7 @@ async def upload_department_roster_csv(
                 address=address or "Not provided",
                 programme_id=matched_prog.id,
                 is_hosteller=is_hosteller,
-                security_deposit_amount=deposit_amt,
+                security_deposit_amount=Decimal("0.00"),
                 source="department_upload",
                 created_by_user_id=current_user.id,
                 updated_by_user_id=current_user.id,
@@ -896,12 +888,19 @@ async def upload_department_roster_csv(
     db.add(audit)
     db.commit()
 
+    upload_message = (
+        "Security deposits are managed by Accounts and any provided deposit amounts were ignored."
+        if has_deposit_col
+        else None
+    )
+
     return RosterUploadResponse(
         total_rows=len(row_reports),
         created_count=created_count,
         updated_count=updated_count,
         rejected_count=rejected_count,
         rows=row_reports,
+        message=upload_message,
     )
 
 
@@ -965,7 +964,7 @@ def create_department_roster_student(
         address=body.address.strip() if body.address else "Not provided",
         programme_id=prog.id,
         is_hosteller=body.is_hosteller,
-        security_deposit_amount=body.security_deposit_amount,
+        security_deposit_amount=Decimal("0.00"),
         source="department_add",
         created_by_user_id=current_user.id,
         updated_by_user_id=current_user.id,
@@ -985,7 +984,8 @@ def create_department_roster_student(
     db.commit()
     db.refresh(student)
 
-    return _format_roster_item(student)
+    msg = "Security deposits are managed by Accounts." if body.security_deposit_amount is not None else None
+    return _format_roster_item(student, message=msg)
 
 
 @router.get(
@@ -1174,7 +1174,8 @@ def patch_department_roster_student(
     db.commit()
     db.refresh(student)
 
-    return _format_roster_item(student)
+    msg = "Security deposits are managed by Accounts." if body.security_deposit_amount is not None else None
+    return _format_roster_item(student, message=msg)
 
 
 # ---------------------------------------------------------------------------

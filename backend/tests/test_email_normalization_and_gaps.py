@@ -225,7 +225,10 @@ def test_roster_csv_upload_syncs_user_and_audits(client, db_session):
 
 def test_hod_request_detail_returns_200_and_certificate_code(client, db_session):
     """GET /hod/requests/{id} returns full approvals table and certificate_code without 500 error."""
-    prog = db_session.execute(select(Programme)).scalars().first()
+    hod = db_session.execute(select(User).where(User.email == "hod.csit@example.edu")).scalar_one()
+    prog = db_session.execute(
+        select(Programme).where(Programme.academic_department_id == hod.department_id)
+    ).scalars().first()
     roster = StudentRoster(
         registration_number="HOD2026001",
         name="HoD Test Student",
@@ -257,8 +260,6 @@ def test_hod_request_detail_returns_200_and_certificate_code(client, db_session)
     )
     db_session.add(req)
     db_session.flush()
-
-    hod = db_session.execute(select(User).where(User.email == "hod.csit@example.edu")).scalar_one()
 
     cert = Certificate(
         request_id=req.id,

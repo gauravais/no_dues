@@ -368,3 +368,162 @@ def test_ledger_deposit_amount_in_queue_detail_and_audit(client: TestClient, db_
     assert audit.details["deposit_amount"] == "7000.00"
     assert audit.details["ledger_deposit_amount"] == "7500.00"
     assert audit.details["deposit_differs_from_ledger"] is True
+
+
+def test_deposit_permission_boundaries(client: TestClient, db_session: Session):
+    """
+    Verifies permission boundaries on security_deposit_amount:
+    - Dept template has no deposit column.
+    - Dept officer upload, add, edit ignore deposit values and never overwrite existing.
+    - Admin upload, edit ignore deposit values and never overwrite existing.
+    - Registrar can update deposit via PATCH /registrar/roster/{id}/deposit and CSV upload.
+    """
+    # 1. Academic department officer setup
+    dept_officer = db_session.execute(
+        select(User).where(User.email == "officer.csit@example.edu")
+    ).scalar_one()
+    dept_headers = make_auth_headers(dept_officer.id)
+
+    # Check department template CSV has no security_deposit_amount
+    tmpl_res = client.get("/department/roster/template.csv", headers=dept_headers)
+    assert tmpl_res.status_code == 200
+    tmpl_header = tmpl_res.text.splitlines()[0]
+    assert "security_deposit_amount" not in tmpl_header
+    assert "registration_number,name,email,mobile,address,programme,is_hosteller" in tmpl_header
+
+    # Pre-seed a student with deposit = 3000.00
+    cs_prog = db_session.execute(
+        select(Programme).where(Programme.name == "Bachelor of Technology (B.Tech.) Computer Engineering")
+    ).scalar_one()
+
+    student = StudentRoster(
+        registration_number="2026BOUND01",
+        name="Boundary Student",
+        email="bound01@svsu.ac.in",
+        mobile="9800000001",
+        address="Hostel 1",
+        programme_id=cs_prog.id,
+        is_hosteller=True,
+        security_deposit_amount=Decimal("3000.00"),
+    )
+    db_session.add(student)
+    db_session.commit()
+    db_session.refresh(student)
+
+    # 2. Dept officer attempts to overwrite deposit via upload
+    dept_csv = (
+        "registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\r\n"
+        f"2026BOUND01,Boundary Student,bound01@svsu.ac.in,9800000001,Hostel 1,{cs_prog.name},true,5000.00\r\n"
+    )
+    res_dept_upload = client.post(
+        "/department/roster/upload",
+        files={"file": ("roster.csv", io.BytesIO(dept_csv.encode("utf-8")), "text/csv")},
+        headers=dept_headers,
+    )
+    assert res_dept_upload.status_code == 200
+    assert "deposits are managed by Accounts" in res_dept_upload.json().get("message", "")
+
+    db_session.expire_all()
+    s_check = db_session.scalar(select(StudentRoster).where(StudentRoster.id == student.id))
+    assert s_check.security_deposit_amount == Decimal("3000.00")  # Untouched
+
+    # 3. Dept officer attempts to create student with deposit
+    res_dept_create = client.post(
+        "/department/roster",
+        json={
+            "registration_number": "2026BOUND02",
+            "name": "New Bound Student",
+            "email": "bound02@svsu.ac.in",
+            "mobile": "9800000002",
+            "address": "Hostel 2",
+            "programme_id": cs_prog.id,
+            "is_hosteller": False,
+            "security_deposit_amount": 7000.00,
+        },
+        headers=dept_headers,
+    )
+    assert res_dept_create.status_code == 201
+    assert "deposits are managed by Accounts" in res_dept_create.json().get("message", "")
+    assert Decimal(str(res_dept_create.json()["security_deposit_amount"])) == Decimal("0.00")
+
+    s2_check = db_session.scalar(select(StudentRoster).where(StudentRoster.registration_number == "2026BOUND02"))
+    assert s2_check.security_deposit_amount == Decimal("0.00")
+
+    # 4. Dept officer attempts to edit student with deposit
+    res_dept_patch = client.patch(
+        f"/department/roster/{student.id}",
+        json={"name": "Boundary Updated", "security_deposit_amount": 9000.00},
+        headers=dept_headers,
+    )
+    assert res_dept_patch.status_code == 200
+    assert "deposits are managed by Accounts" in res_dept_patch.json().get("message", "")
+
+    db_session.expire_all()
+    s_check = db_session.scalar(select(StudentRoster).where(StudentRoster.id == student.id))
+    assert s_check.security_deposit_amount == Decimal("3000.00")  # Still 3000.00!
+
+    # 5. Admin attempts to overwrite deposit via upload
+    admin = db_session.execute(select(User).where(User.role == UserRole.admin)).scalars().first()
+    admin_headers = make_auth_headers(admin.id)
+
+    admin_csv = (
+        "registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\r\n"
+        f"2026BOUND01,Boundary Updated,bound01@svsu.ac.in,9800000001,Hostel 1,{cs_prog.name},true,8000.00\r\n"
+    )
+    res_admin_upload = client.post(
+        "/admin/roster/upload",
+        files={"file": ("roster.csv", io.BytesIO(admin_csv.encode("utf-8")), "text/csv")},
+        headers=admin_headers,
+    )
+    assert res_admin_upload.status_code == 200
+    assert "deposits are managed by Accounts" in res_admin_upload.json().get("message", "")
+
+    db_session.expire_all()
+    s_check = db_session.scalar(select(StudentRoster).where(StudentRoster.id == student.id))
+    assert s_check.security_deposit_amount == Decimal("3000.00")  # Still 3000.00!
+
+    # 6. Admin attempts to edit student with deposit
+    res_admin_patch = client.patch(
+        f"/admin/roster/{student.id}",
+        json={"security_deposit_amount": 8500.00},
+        headers=admin_headers,
+    )
+    assert res_admin_patch.status_code == 200
+    assert "deposits are managed by Accounts" in res_admin_patch.json().get("message", "")
+
+    db_session.expire_all()
+    s_check = db_session.scalar(select(StudentRoster).where(StudentRoster.id == student.id))
+    assert s_check.security_deposit_amount == Decimal("3000.00")  # Still 3000.00!
+
+    # 7. Registrar CAN change deposit via PATCH /registrar/roster/{id}/deposit
+    registrar = _get_or_create_registrar(db_session)
+    reg_headers = make_auth_headers(registrar.id)
+
+    res_reg_patch = client.patch(
+        f"/registrar/roster/{student.id}/deposit",
+        json={"deposit_amount": 4500.00},
+        headers=reg_headers,
+    )
+    assert res_reg_patch.status_code == 200
+    assert Decimal(str(res_reg_patch.json()["security_deposit_amount"])) == Decimal("4500.00")
+
+    db_session.expire_all()
+    s_check = db_session.scalar(select(StudentRoster).where(StudentRoster.id == student.id))
+    assert s_check.security_deposit_amount == Decimal("4500.00")
+
+    # 8. Registrar CAN update deposit via POST /registrar/deposit-ledger/upload
+    ledger_csv = (
+        "registration_number,deposit_amount\r\n"
+        f"2026BOUND01,5200.00\r\n"
+    )
+    res_ledger_upload = client.post(
+        "/registrar/deposit-ledger/upload",
+        files={"file": ("ledger.csv", io.BytesIO(ledger_csv.encode("utf-8")), "text/csv")},
+        headers=reg_headers,
+    )
+    assert res_ledger_upload.status_code == 200
+    assert res_ledger_upload.json()["updated_count"] == 1
+
+    db_session.expire_all()
+    s_check = db_session.scalar(select(StudentRoster).where(StudentRoster.id == student.id))
+    assert s_check.security_deposit_amount == Decimal("5200.00")

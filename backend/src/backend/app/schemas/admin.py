@@ -22,6 +22,7 @@ class RosterUploadResponse(BaseModel):
     updated_count: int
     rejected_count: int
     rows: list[RosterUploadRowReport]
+    message: str | None = Field(None, description="Informational message")
 
 
 class RosterItem(BaseModel):
@@ -37,6 +38,7 @@ class RosterItem(BaseModel):
     is_hosteller: bool
     security_deposit_amount: Decimal
     assigned_department_ids: list[int] = Field(default_factory=list)
+    message: str | None = Field(None, description="Informational message")
 
 
 class RosterListResponse(BaseModel):
@@ -48,7 +50,10 @@ class RosterListResponse(BaseModel):
 class RosterUpdateRequest(BaseModel):
     """Payload to patch a student roster record."""
     is_hosteller: bool | None = None
-    security_deposit_amount: Decimal | None = Field(None, ge=0)
+    security_deposit_amount: Decimal | None = Field(
+        None,
+        description="Ignored; deposit amounts are managed exclusively by Accounts",
+    )
     address: str | None = None
     mobile: str | None = None
     email: EmailStr | None = None

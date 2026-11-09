@@ -351,7 +351,7 @@ def test_17_admin_roster_csv_upload(client: TestClient, db_session: Session):
     csv_data = """registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount
 CSV2026001,New Student One,newstudent1@example.edu,9811111111,10 New Colony,Bachelor of Technology (B.Tech.) Computer Engineering,true,5000.00
 CSV2026002,Bad Prog Student,badprog@example.edu,9811111112,11 New Colony,Unknown Nonexistent Programme,false,5000.00
-CSV2026003,Negative Deposit,negdep@example.edu,9811111113,12 New Colony,Bachelor of Technology (B.Tech.) Computer Engineering,false,-100.00
+CSV2026003,Invalid Email Student,notanemail,9811111113,12 New Colony,Bachelor of Technology (B.Tech.) Computer Engineering,false,-100.00
 DEMO2026002,Priya Sharma Updated,priya.sharma@example.edu,9800000002,Updated Address 123,Bachelor of Technology (B.Tech.) Computer Engineering,true,7000.00
 """
     files = {"file": ("roster.csv", io.BytesIO(csv_data.encode("utf-8")), "text/csv")}
@@ -362,14 +362,14 @@ DEMO2026002,Priya Sharma Updated,priya.sharma@example.edu,9800000002,Updated Add
     assert report["total_rows"] == 4
     assert report["created_count"] == 1  # CSV2026001
     assert report["updated_count"] == 1  # DEMO2026002
-    assert report["rejected_count"] == 2  # CSV2026002 (bad prog) and CSV2026003 (neg deposit)
+    assert report["rejected_count"] == 2  # CSV2026002 (bad prog) and CSV2026003 (invalid email)
 
-    # Verify updated row in DB
+    # Verify updated row in DB (security deposit is NOT overwritten by admin upload)
     updated_roster = db.execute(
         select(StudentRoster).where(StudentRoster.registration_number == "DEMO2026002")
     ).scalar_one()
     assert updated_roster.address == "Updated Address 123"
-    assert updated_roster.security_deposit_amount == Decimal("7000.00")
+    assert updated_roster.security_deposit_amount == Decimal("5000.00")
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +382,7 @@ def test_18_admin_roster_patch_and_assigned_departments(client: TestClient, db_s
 
     _, roster = _create_test_student(db, reg_num="DEMO2026003", email="rohan.verma@example.edu")
 
-    # 1. PATCH deposit and hosteller status
+    # 1. PATCH deposit and hosteller status (deposit is ignored and unchanged)
     patch_res = client.patch(
         f"/admin/roster/{roster.id}",
         json={"is_hosteller": False, "security_deposit_amount": 6500.00},
@@ -391,7 +391,8 @@ def test_18_admin_roster_patch_and_assigned_departments(client: TestClient, db_s
     assert patch_res.status_code == 200
     p_data = patch_res.json()
     assert p_data["is_hosteller"] is False
-    assert Decimal(str(p_data["security_deposit_amount"])) == Decimal("6500.00")
+    assert Decimal(str(p_data["security_deposit_amount"])) == Decimal("5000.00")
+    assert "deposits are managed by Accounts" in p_data["message"]
 
     # 2. PUT assigned departments
     lab_depts = db.execute(

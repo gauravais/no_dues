@@ -106,7 +106,7 @@ def _record_admin_audit(
     db.add(audit)
 
 
-def _format_roster_item(r: StudentRoster) -> RosterItem:
+def _format_roster_item(r: StudentRoster, message: str | None = None) -> RosterItem:
     prog_name = r.programme.name if r.programme else "N/A"
     assigned_ids = [ad.department_id for ad in r.assigned_departments or []]
     return RosterItem(
@@ -121,6 +121,7 @@ def _format_roster_item(r: StudentRoster) -> RosterItem:
         is_hosteller=r.is_hosteller,
         security_deposit_amount=r.security_deposit_amount,
         assigned_department_ids=assigned_ids,
+        message=message,
     )
 
 
@@ -132,7 +133,8 @@ def _format_roster_item(r: StudentRoster) -> RosterItem:
     summary="Upload Student Roster CSV",
     description=(
         "Uploads a CSV file containing student roster records. Validates each row: non-empty credentials, "
-        "valid email format, known programme name, valid hosteller flag, and non-negative deposit. "
+        "valid email format, known programme name, and valid hosteller flag. "
+        "Security deposit amounts are ignored (managed exclusively by Accounts). "
         "Performs an upsert based on registration_number and returns a row-by-row status report. "
         "Does NOT create user accounts."
     ),
@@ -162,7 +164,7 @@ async def upload_roster_csv(
     fieldnames_map = {f.strip().lower(): f for f in reader.fieldnames if f}
     required_cols = [
         "registration_number", "name", "email", "mobile",
-        "address", "programme", "is_hosteller", "security_deposit_amount"
+        "address", "programme", "is_hosteller"
     ]
     for col in required_cols:
         if col not in fieldnames_map:
@@ -170,6 +172,8 @@ async def upload_roster_csv(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Missing required CSV column '{col}'. Required columns: {', '.join(required_cols)}",
             )
+
+    has_deposit_col = "security_deposit_amount" in fieldnames_map
 
     # Pre-fetch all programmes for fast lookup
     all_programmes = db.execute(select(Programme)).scalars().all()
@@ -188,7 +192,6 @@ async def upload_roster_csv(
         address = (row.get(fieldnames_map["address"]) or "").strip()
         prog_str = (row.get(fieldnames_map["programme"]) or "").strip()
         hosteller_str = (row.get(fieldnames_map["is_hosteller"]) or "").strip().lower()
-        deposit_str = (row.get(fieldnames_map["security_deposit_amount"]) or "").strip()
 
         # Validations
         if not reg_num:
@@ -226,15 +229,6 @@ async def upload_roster_csv(
             continue
 
         is_hosteller = hosteller_str in ("true", "1", "yes", "y", "t")
-
-        try:
-            deposit_amt = Decimal(deposit_str) if deposit_str else Decimal("0.00")
-            if deposit_amt < 0:
-                raise ValueError("Negative deposit")
-        except (InvalidOperation, ValueError):
-            row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="rejected", reason="Security deposit amount cannot be negative or invalid number"))
-            rejected_count += 1
-            continue
 
         # Upsert
         existing = db.execute(
@@ -291,7 +285,7 @@ async def upload_roster_csv(
             existing.address = address
             existing.programme_id = prog_id
             existing.is_hosteller = is_hosteller
-            existing.security_deposit_amount = deposit_amt
+            # Security deposit is managed exclusively by Accounts; do not overwrite existing value
             existing.updated_by_user_id = current_user.id
             row_reports.append(RosterUploadRowReport(row_number=idx, registration_number=reg_num, status="updated"))
             updated_count += 1
@@ -322,7 +316,7 @@ async def upload_roster_csv(
                 address=address,
                 programme_id=prog_id,
                 is_hosteller=is_hosteller,
-                security_deposit_amount=deposit_amt,
+                security_deposit_amount=Decimal("0.00"),
                 source="admin",
                 created_by_user_id=current_user.id,
                 updated_by_user_id=current_user.id,
@@ -348,12 +342,19 @@ async def upload_roster_csv(
     )
     db.commit()
 
+    upload_message = (
+        "Security deposits are managed by Accounts and any provided deposit amounts were ignored."
+        if has_deposit_col
+        else None
+    )
+
     return RosterUploadResponse(
         total_rows=total_rows,
         created_count=created_count,
         updated_count=updated_count,
         rejected_count=rejected_count,
         rows=row_reports,
+        message=upload_message,
     )
 
 
@@ -416,7 +417,7 @@ def list_roster(
     status_code=status.HTTP_200_OK,
     operation_id="update_roster_entry",
     summary="Update Student Roster Profile",
-    description="Updates hosteller status, security deposit amount, address, or mobile for a roster record.",
+    description="Updates hosteller status, address, or mobile for a roster record. Security deposit amounts are ignored (managed exclusively by Accounts).",
     responses={
         400: {"model": ErrorResponse, "description": "Invalid update values"},
         403: {"model": ErrorResponse, "description": "Forbidden for non-admin roles"},
@@ -441,16 +442,14 @@ def update_roster_entry(
     if not roster:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Roster record not found")
 
+    deposit_message = None
+    if body.security_deposit_amount is not None:
+        deposit_message = "Security deposits are managed by Accounts."
+
     changes = {}
     if body.is_hosteller is not None:
         changes["is_hosteller"] = body.is_hosteller
         roster.is_hosteller = body.is_hosteller
-
-    if body.security_deposit_amount is not None:
-        if body.security_deposit_amount < 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Security deposit cannot be negative")
-        changes["security_deposit_amount"] = str(body.security_deposit_amount)
-        roster.security_deposit_amount = body.security_deposit_amount
 
     if body.address is not None:
         changes["address"] = body.address.strip()
@@ -539,7 +538,7 @@ def update_roster_entry(
     db.commit()
     db.refresh(roster)
 
-    return _format_roster_item(roster)
+    return _format_roster_item(roster, message=deposit_message)
 
 
 @router.put(

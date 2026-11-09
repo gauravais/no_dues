@@ -14,7 +14,10 @@ class DepartmentRosterCreate(BaseModel):
     programme_id: int = Field(..., description="Programme ID belonging to the academic department", examples=[1])
     address: str = Field("", max_length=500, examples=["Room 101, Hostel A"])
     is_hosteller: bool = Field(False, description="Whether the student resides in university hostel")
-    security_deposit_amount: Decimal = Field(Decimal("0"), ge=0, description="Security deposit amount in INR")
+    security_deposit_amount: Decimal | None = Field(
+        None,
+        description="Ignored; deposit amounts are managed exclusively by Accounts",
+    )
 
 
 class DepartmentRosterPatch(BaseModel):
@@ -24,6 +27,10 @@ class DepartmentRosterPatch(BaseModel):
     mobile: str | None = Field(None, min_length=5, max_length=20)
     address: str | None = Field(None, max_length=500)
     programme_id: int | None = Field(None, description="New enrolled programme ID (refused if student has open request or programme is not active/not in officer's academic department)")
+    security_deposit_amount: Decimal | None = Field(
+        None,
+        description="Ignored; deposit amounts are managed exclusively by Accounts",
+    )
 
 
 class DepartmentRosterItem(BaseModel):
@@ -40,6 +47,7 @@ class DepartmentRosterItem(BaseModel):
     security_deposit_amount: Decimal
     has_user_account: bool = False
     assigned_department_ids: list[int] = Field(default_factory=list)
+    message: str | None = Field(None, description="Informational message")
 
 
 class DepartmentRosterListResponse(BaseModel):
