@@ -104,8 +104,6 @@ export function AdminDashboardPage() {
 
   // Edit Roster Form State
   const [editRosterForm, setEditRosterForm] = useState({
-    is_hosteller: false,
-    security_deposit_amount: '',
     address: '',
     mobile: '',
   })
@@ -178,6 +176,9 @@ export function AdminDashboardPage() {
     onSuccess: (data) => {
       setUploadReport(data)
       setCsvFile(null)
+      if (data?.message) {
+        toast.info(data.message)
+      }
       toast.success(
         `CSV processed: ${data.created_count} created, ${data.updated_count} updated, ${data.rejected_count} rejected.`
       )
@@ -190,8 +191,12 @@ export function AdminDashboardPage() {
 
   const updateRosterMutation = useMutation({
     mutationFn: ({ id, data }) => adminApi.updateRosterEntry(id, data),
-    onSuccess: () => {
-      toast.success('Student roster record updated successfully.')
+    onSuccess: (res) => {
+      if (res?.message) {
+        toast.info(res.message)
+      } else {
+        toast.success('Student roster record updated successfully.')
+      }
       setEditRosterTarget(null)
       queryClient.invalidateQueries({ queryKey: ['admin-roster'] })
     },
@@ -290,8 +295,6 @@ export function AdminDashboardPage() {
   const handleOpenEditRoster = (student) => {
     setEditRosterTarget(student)
     setEditRosterForm({
-      is_hosteller: !!student.is_hosteller,
-      security_deposit_amount: student.security_deposit_amount ?? '',
       address: student.address || '',
       mobile: student.mobile || '',
     })
@@ -301,8 +304,6 @@ export function AdminDashboardPage() {
     e.preventDefault()
     if (!editRosterTarget) return
     const payload = {
-      is_hosteller: editRosterForm.is_hosteller,
-      security_deposit_amount: parseFloat(editRosterForm.security_deposit_amount) || 0,
       address: editRosterForm.address.trim(),
       mobile: editRosterForm.mobile.trim(),
     }
@@ -354,10 +355,10 @@ export function AdminDashboardPage() {
 
   const handleDownloadTemplateCsv = () => {
     const csvContent =
-      'registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\n' +
-      'STU2024001,Student One,student1@svsu.ac.in,9876543210,"H.No 12, Sector 14, Gurugram",B.Tech Robotics and Automation,true,5000\n' +
-      'STU2024002,Student Two,student2@svsu.ac.in,9876543211,"Flat 402, Green Valley, Palwal",B.Tech Industry 4.0,false,3000\n' +
-      'STU2024003,Student Three,student3@svsu.ac.in,9876543212,"Vill. Dudhola, Palwal, Haryana",B.Voc Automotive Studies,true,5000\n'
+      'registration_number,name,email,mobile,address,programme\n' +
+      'STU2024001,Student One,student1@svsu.ac.in,9876543210,"H.No 12, Sector 14, Gurugram",B.Tech Robotics and Automation\n' +
+      'STU2024002,Student Two,student2@svsu.ac.in,9876543211,"Flat 402, Green Valley, Palwal",B.Tech Industry 4.0\n' +
+      'STU2024003,Student Three,student3@svsu.ac.in,9876543212,"Vill. Dudhola, Palwal, Haryana",B.Voc Automotive Studies\n'
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -401,37 +402,6 @@ export function AdminDashboardPage() {
           {row.getValue('programme_name') || 'N/A'}
         </span>
       ),
-    },
-    {
-      accessorKey: 'is_hosteller',
-      header: 'Resident Status',
-      cell: ({ row }) => {
-        const isHosteller = row.getValue('is_hosteller')
-        return (
-          <Badge
-            variant="outline"
-            className={
-              isHosteller
-                ? 'bg-amber-50 text-amber-800 border-amber-200 text-[10px]'
-                : 'bg-zinc-50 text-zinc-600 border-zinc-200 text-[10px]'
-            }
-          >
-            {isHosteller ? 'Hosteller' : 'Day Scholar'}
-          </Badge>
-        )
-      },
-    },
-    {
-      accessorKey: 'security_deposit_amount',
-      header: 'Security Deposit',
-      cell: ({ row }) => {
-        const amount = Number(row.getValue('security_deposit_amount') || 0)
-        return (
-          <span className="font-mono text-xs font-semibold text-zinc-900">
-            ₹{amount.toLocaleString('en-IN')}
-          </span>
-        )
-      },
     },
     {
       accessorKey: 'assigned_department_ids',
@@ -567,7 +537,7 @@ export function AdminDashboardPage() {
                       Master Student Roster
                     </CardTitle>
                     <CardDescription className="text-xs">
-                      Official directory of graduating students eligible for No-Dues Clearance.
+                      Official directory of graduating students eligible for No-Dues Clearance. Security deposits are entered by Accounts.
                     </CardDescription>
                   </div>
 
@@ -800,6 +770,11 @@ export function AdminDashboardPage() {
                     </CardHeader>
 
                     <CardContent className="p-0">
+                      {uploadReport?.message && (
+                        <div className="p-3 bg-zinc-50 border-b border-border text-xs text-zinc-700">
+                          {uploadReport.message}
+                        </div>
+                      )}
                       <div className="max-h-96 overflow-y-auto">
                         <table className="w-full text-xs text-left">
                           <thead className="bg-zinc-50 border-b border-border text-zinc-600 font-medium">
@@ -863,21 +838,18 @@ export function AdminDashboardPage() {
                   </CardHeader>
                   <CardContent className="p-5 pt-0 space-y-3 text-xs text-zinc-700">
                     <p className="text-muted-foreground leading-relaxed">
-                      The file header must contain exactly the following 8 column names (case-insensitive):
+                      The file header must contain exactly the following 6 column names (case-insensitive):
                     </p>
                     <div className="p-2.5 bg-zinc-50 rounded-lg border border-border font-mono text-[11px] text-zinc-800 break-all leading-relaxed">
-                      registration_number, name, email, mobile, address, programme, is_hosteller, security_deposit_amount
+                      registration_number, name, email, mobile, address, programme
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      Security deposits are entered by Accounts.
+                    </p>
 
                     <div className="space-y-2 pt-2 border-t border-border">
                       <div className="text-[11px]">
                         <span className="font-bold text-zinc-900">programme:</span> Must match an accredited SVSU programme name exactly (e.g. &apos;B.Tech Robotics and Automation&apos;, &apos;B.Voc Automotive Studies&apos;).
-                      </div>
-                      <div className="text-[11px]">
-                        <span className="font-bold text-zinc-900">is_hosteller:</span> Boolean true/false, 1/0, or yes/no.
-                      </div>
-                      <div className="text-[11px]">
-                        <span className="font-bold text-zinc-900">security_deposit_amount:</span> Non-negative integer or decimal amount in INR.
                       </div>
                     </div>
                   </CardContent>
@@ -1284,40 +1256,6 @@ export function AdminDashboardPage() {
                 className="text-xs h-9"
                 required
               />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="editSecurityDeposit" className="text-xs font-semibold">Security Deposit Amount (₹ INR)</Label>
-              <Input
-                id="editSecurityDeposit"
-                type="number"
-                min="0"
-                step="100"
-                value={editRosterForm.security_deposit_amount}
-                onChange={(e) =>
-                  setEditRosterForm({
-                    ...editRosterForm,
-                    security_deposit_amount: e.target.value,
-                  })
-                }
-                className="text-xs h-9 font-mono"
-                required
-              />
-            </div>
-
-            <div className="flex items-center gap-2 pt-1">
-              <input
-                id="hostellerCheckbox"
-                type="checkbox"
-                checked={editRosterForm.is_hosteller}
-                onChange={(e) =>
-                  setEditRosterForm({ ...editRosterForm, is_hosteller: e.target.checked })
-                }
-                className="h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
-              />
-              <Label htmlFor="hostellerCheckbox" className="text-xs font-medium cursor-pointer">
-                Student is a University Hosteller (Requires Hostel clearance branch)
-              </Label>
             </div>
 
             <DialogFooter className="pt-4">

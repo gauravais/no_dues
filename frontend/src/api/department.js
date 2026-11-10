@@ -128,8 +128,6 @@ export const departmentApi = {
       mobile: data.mobile.trim(),
       programme_id: Number(data.programme_id),
       address: data.address?.trim() || null,
-      is_hosteller: Boolean(data.is_hosteller),
-      security_deposit_amount: data.security_deposit_amount != null ? String(data.security_deposit_amount) : undefined,
     })
     return response.data
   },

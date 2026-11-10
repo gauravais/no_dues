@@ -33,16 +33,14 @@ export const adminApi = {
   },
 
   /**
-   * Update student roster profile (hosteller, deposit, address, mobile)
+   * Update student roster profile (address, mobile)
    * @param {number} id - Roster ID
    * @param {Object} data
    */
-  async updateRosterEntry(id, { address, mobile, is_hosteller, security_deposit_amount } = {}) {
+  async updateRosterEntry(id, { address, mobile } = {}) {
     const payload = {}
     if (address !== undefined) payload.address = address
     if (mobile !== undefined) payload.mobile = mobile
-    if (is_hosteller !== undefined) payload.is_hosteller = is_hosteller
-    if (security_deposit_amount !== undefined) payload.security_deposit_amount = security_deposit_amount
 
     const response = await api.patch(`/admin/roster/${id}`, payload)
     return response.data

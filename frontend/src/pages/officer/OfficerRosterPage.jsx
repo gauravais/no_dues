@@ -26,7 +26,6 @@ import {
   Edit,
   Search,
   RotateCw,
-  Home,
   AlertTriangle,
   Upload,
 } from 'lucide-react'
@@ -63,8 +62,6 @@ export function OfficerRosterPage() {
     mobile: '',
     programme_id: '',
     address: '',
-    is_hosteller: false,
-    security_deposit_amount: '5000.00',
   })
   const [addError, setAddError] = useState('')
 
@@ -128,8 +125,12 @@ export function OfficerRosterPage() {
   // Create Student Mutation
   const createMutation = useMutation({
     mutationFn: (data) => departmentApi.createRosterStudent(data),
-    onSuccess: () => {
-      toast.success('Student added to academic roster successfully.')
+    onSuccess: (res) => {
+      if (res?.message) {
+        toast.info(res.message)
+      } else {
+        toast.success('Student added to academic roster successfully.')
+      }
       setAddModalOpen(false)
       setAddForm({
         registration_number: '',
@@ -138,8 +139,6 @@ export function OfficerRosterPage() {
         mobile: '',
         programme_id: '',
         address: '',
-        is_hosteller: false,
-        security_deposit_amount: '5000.00',
       })
       setAddError('')
       queryClient.invalidateQueries({ queryKey: ['department', 'roster'] })
@@ -154,8 +153,12 @@ export function OfficerRosterPage() {
   // Patch Student Mutation
   const patchMutation = useMutation({
     mutationFn: ({ id, data }) => departmentApi.patchRosterStudent(id, data),
-    onSuccess: () => {
-      toast.success('Student roster record updated successfully.')
+    onSuccess: (res) => {
+      if (res?.message) {
+        toast.info(res.message)
+      } else {
+        toast.success('Student roster record updated successfully.')
+      }
       setEditModalOpen(false)
       setSelectedStudent(null)
       setEditError('')
@@ -258,30 +261,6 @@ export function OfficerRosterPage() {
         ),
       },
       {
-        accessorKey: 'is_hosteller',
-        header: 'Residency',
-        cell: ({ row }) =>
-          row.original.is_hosteller ? (
-            <Badge variant="outline" className="bg-indigo-50 text-indigo-800 border-indigo-200 text-[10px] gap-1">
-              <Home className="w-3 h-3 text-indigo-600" />
-              Hosteller
-            </Badge>
-          ) : (
-            <Badge variant="outline" className="bg-zinc-50 text-zinc-600 border-zinc-200 text-[10px]">
-              Day Scholar
-            </Badge>
-          ),
-      },
-      {
-        accessorKey: 'security_deposit_amount',
-        header: 'Deposit (₹)',
-        cell: ({ row }) => (
-          <span className="font-mono font-semibold text-xs text-zinc-900">
-            ₹{row.original.security_deposit_amount || '0.00'}
-          </span>
-        ),
-      },
-      {
         accessorKey: 'has_user_account',
         header: 'User Account',
         cell: ({ row }) =>
@@ -325,25 +304,13 @@ export function OfficerRosterPage() {
             {item.registration_number}
           </span>
         </div>
-        {item.is_hosteller ? (
-          <Badge variant="outline" className="bg-indigo-50 text-indigo-800 border-indigo-200 text-[10px]">
-            Hosteller
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="bg-zinc-50 text-zinc-600 border-zinc-200 text-[10px]">
-            Day Scholar
-          </Badge>
-        )}
       </div>
 
       <div className="text-xs text-zinc-600">
         {item.programme_name} • {item.email}
       </div>
 
-      <div className="flex items-center justify-between text-xs pt-1 border-t border-zinc-100">
-        <span className="font-mono text-zinc-700">
-          Deposit: ₹{item.security_deposit_amount}
-        </span>
+      <div className="flex items-center justify-end text-xs pt-1 border-t border-zinc-100">
         <Button
           variant="outline"
           size="sm"
@@ -368,7 +335,7 @@ export function OfficerRosterPage() {
               Academic Department Student Roster
             </h1>
             <p className="text-xs sm:text-sm text-zinc-500 mt-1">
-              Maintain the student roster and records for programmes belonging strictly to {user?.department_name || 'your academic department'}.
+              Maintain the student roster and records for programmes belonging strictly to {user?.department_name || 'your academic department'}. Security deposits are entered by Accounts.
             </p>
           </div>
 
@@ -462,12 +429,15 @@ export function OfficerRosterPage() {
           <TabsContent value="upload" className="space-y-4">
             <CsvUpload
               title="Upload Academic Programme Roster CSV"
-              description="Batch ingest student roster records for programmes in your academic department."
+              description="Batch ingest student roster records for programmes in your academic department. Security deposits are entered by Accounts."
               columnsHint={['registration_number', 'name', 'email', 'mobile', 'programme']}
               onUpload={(file) => departmentApi.uploadRosterCsv(file)}
               onDownloadTemplate={() => departmentApi.downloadRosterTemplate()}
               templateFilename="academic_roster_template.csv"
-              onSuccess={() => {
+              onSuccess={(res) => {
+                if (res?.message) {
+                  toast.info(res.message)
+                }
                 queryClient.invalidateQueries({ queryKey: ['department', 'roster'] })
               }}
             />
@@ -594,32 +564,6 @@ export function OfficerRosterPage() {
                   value={addForm.address}
                   onChange={(e) => setAddForm({ ...addForm, address: e.target.value })}
                   className="text-xs"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="isHosteller"
-                  checked={addForm.is_hosteller}
-                  onChange={(e) => setAddForm({ ...addForm, is_hosteller: e.target.checked })}
-                  className="h-4 w-4 rounded border-zinc-300 text-black focus:ring-black accent-zinc-900 cursor-pointer"
-                />
-                <Label htmlFor="isHosteller" className="text-xs font-medium text-zinc-800 cursor-pointer">
-                  Student is residing in university hostel (Hosteller)
-                </Label>
-              </div>
-
-              <div className="space-y-1.5 pt-1">
-                <Label htmlFor="depositAmt" className="text-xs font-semibold text-zinc-800">
-                  Security Deposit Amount (₹)
-                </Label>
-                <Input
-                  id="depositAmt"
-                  value={addForm.security_deposit_amount}
-                  onChange={(e) => setAddForm({ ...addForm, security_deposit_amount: e.target.value })}
-                  placeholder="5000.00"
-                  className="font-mono text-xs"
                 />
               </div>
             </div>

@@ -227,7 +227,7 @@ export function HelpPage() {
                 <strong>Dossier Reviews:</strong> When multiple assigned offices are attached to a student clearance application, the dossier provides dedicated decision sections for each office, allowing independent approvals or rejections with specific remarks.
               </li>
               <li>
-                <strong>Academic Scope:</strong> Access to the student roster and laboratory catalog is granted whenever an officer belongs to at least one academic department, with scope selectors available to narrow records by academic department.
+                <strong>Academic Scope:</strong> Access to the student roster and laboratory catalog is granted whenever an officer belongs to at least one academic department, with scope selectors available to narrow records by academic department. Security deposits are entered by Accounts.
               </li>
             </ul>
           </CardContent>

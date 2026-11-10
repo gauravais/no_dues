@@ -68,8 +68,12 @@ export function AdminRosterPage() {
   // Edit Mutation
   const editMutation = useMutation({
     mutationFn: ({ id, data }) => adminApi.updateRosterEntry(id, data),
-    onSuccess: () => {
-      toast.success('Student roster record updated successfully.')
+    onSuccess: (res) => {
+      if (res?.message) {
+        toast.info(res.message)
+      } else {
+        toast.success('Student roster record updated successfully.')
+      }
       setEditTarget(null)
       setEditError('')
       queryClient.invalidateQueries({ queryKey: ['admin', 'roster'] })
@@ -113,8 +117,8 @@ export function AdminRosterPage() {
 
   const downloadRosterTemplate = () => {
     const csvContent =
-      'registration_number,name,email,mobile,address,programme,is_hosteller,security_deposit_amount\r\n' +
-      '2026CS901,Arjun Mehta,arjun.mehta@svsu.ac.in,9876543210,Campus Hostels SVSU,Bachelor of Technology (B.Tech.) Computer Engineering,true,5000.00\r\n'
+      'registration_number,name,email,mobile,address,programme\r\n' +
+      '2026CS901,Arjun Mehta,arjun.mehta@svsu.ac.in,9876543210,Campus Hostels SVSU,Bachelor of Technology (B.Tech.) Computer Engineering\r\n'
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -202,7 +206,7 @@ export function AdminRosterPage() {
               </h1>
             </div>
             <p className="text-xs sm:text-sm text-muted-foreground">
-              Institutional fallback for viewing and managing university student records across all academic departments.
+              Institutional fallback for viewing and managing university student records across all academic departments. Security deposits are entered by Accounts.
             </p>
           </div>
 
@@ -231,10 +235,14 @@ export function AdminRosterPage() {
           <div className="max-w-2xl mx-auto py-4">
             <CsvUpload
               title="Global Student Roster Batch Ingestion"
-              description="Upload a CSV with student registration records. Required columns: registration_number, name, email, mobile, address, programme, is_hosteller, security_deposit_amount."
+              description="Upload a CSV with student registration records. Required columns: registration_number, name, email, mobile, address, programme. Security deposits are entered by Accounts."
+              columnsHint={['registration_number', 'name', 'email', 'mobile', 'address', 'programme']}
               onDownloadTemplate={downloadRosterTemplate}
               onUpload={async (file) => {
                 const res = await adminApi.uploadRosterCsv(file)
+                if (res?.message) {
+                  toast.info(res.message)
+                }
                 queryClient.invalidateQueries({ queryKey: ['admin', 'roster'] })
                 return res
               }}
@@ -246,7 +254,7 @@ export function AdminRosterPage() {
             <div className="p-3.5 rounded-xl bg-zinc-50 border border-zinc-200 text-xs text-zinc-600 flex items-start gap-2.5">
               <Info className="w-4 h-4 text-zinc-500 shrink-0 mt-0.5" />
               <p className="text-[11px] leading-relaxed">
-                <strong className="text-zinc-800">Clearance Protocol Notice:</strong> Hostel residency and security deposit amounts are no longer maintained on the student roster. Students declare hostel residency directly when applying for clearance, and the Accounts Branch audits and records official deposit amounts during refund verification.
+                <strong className="text-zinc-800">Clearance Protocol Notice:</strong> Hostel residency and security deposit amounts are no longer maintained on the student roster. Security deposits are entered by Accounts. Students declare hostel residency directly when applying for clearance, and the Accounts Branch audits and records official deposit amounts during refund verification.
               </p>
             </div>
 

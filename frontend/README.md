@@ -114,7 +114,7 @@ Responsibility is clearly distributed across six distinct university actors to p
 - **Decision Modal**: Approve or reject with live `x/500` character counter; remarks are strictly mandatory upon rejection. Plain text notice clarifies valid approval remarks.
 - **Academic Officer Suite**:
   - **Academic Role Guarding**: Roster and Lab Catalog links appear strictly when the officer belongs to at least one academic department. Pure service officers never see roster or catalog views.
-  - **Student Roster (`/officer/roster`)**: Programme-scoped student roster management, single student creation, profile editing (including degree programme assignment and 409 conflict notices), CSV batch upload with template download, and department scope filter.
+  - **Student Roster (`/officer/roster`)**: Programme-scoped student roster management, single student creation, profile editing (including degree programme assignment and 409 conflict notices), CSV batch upload with template download, and department scope filter. Security deposits are entered by Accounts.
   - **Lab Catalog (`/officer/lab-catalog`)**: Laboratory subjects catalog, subject edit dialog, "My labs and workshops" tab (`GET /department/lab-workshops`) for creating and managing active workshops, and CSV upload with dry run verification (`dry_run=true`) and optional missing office creation (`create_missing_offices=true`).
   - **Clearance Dossier & Add Office (`/officer/requests/:id`)**: Comprehensive student dossier view and post-submission office dispatch modal (`POST /department/requests/{id}/add-department`).
 
@@ -150,7 +150,7 @@ Responsibility is clearly distributed across six distinct university actors to p
   - Bulk staff CSV upload with template download supporting pipe-separated departments (e.g. `Library|Sports`), row-by-row report, and one-time credentials export.
   - On-demand password reset and account activate/deactivate toggle (with self-deactivation protection).
   - One-time temporary password modal that wipes credentials from memory upon dismissal.
-- **Master Student Roster (`/admin/roster`)**: Fallback student directory search, profile editor, and CSV batch ingestion.
+- **Master Student Roster (`/admin/roster`)**: Fallback student directory search, profile editor, and CSV batch ingestion. Security deposits are entered by Accounts.
 - **Master Lab Catalog (`/admin/lab-courses`)**: Global laboratory course directory, edit dialog, CSV ingestion with dry-run verification preview, missing office creation toggle, and unstaffed office warnings.
 
 ### 6. Public Certificate Verification (`/verify`, `/verify/:code`)

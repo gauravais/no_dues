@@ -121,6 +121,9 @@ export function CsvUpload({
       toast.success(
         `Batch processed: ${report.created_count} created, ${report.updated_count} updated, ${report.rejected_count} rejected.`
       )
+      if (report?.message) {
+        toast.info(report.message)
+      }
       if (onSuccess) onSuccess(report)
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to process CSV upload.')
@@ -313,6 +316,11 @@ export function CsvUpload({
           </CardHeader>
 
           <CardContent className="p-6 pt-0 space-y-3">
+            {uploadReport.message && (
+              <div className="p-3 rounded-lg bg-zinc-50 border border-zinc-200 text-zinc-700 text-xs leading-relaxed">
+                {uploadReport.message}
+              </div>
+            )}
             {(!uploadReport.rows || uploadReport.rows.length === 0) ? (
               <p className="text-xs text-zinc-500 italic py-2">
                 No individual row diagnostic details were returned.
