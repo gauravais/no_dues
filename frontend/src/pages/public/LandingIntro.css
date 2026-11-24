@@ -1,0 +1,54 @@
+.intro-fast {
+  opacity: 0;
+  animation: introRise 0.65s cubic-bezier(.2, .7, .2, 1) forwards;
+  animation-delay: calc(5s + var(--intro-random, 0s));
+}
+
+/* Main headline appears later */
+.intro-headline {
+  opacity: 0;
+  animation: headlineReveal 1.1s cubic-bezier(.16, 1, .3, 1) forwards;
+  animation-delay: 6s;
+}
+
+/* Larger homepage sections */
+.intro-section {
+  opacity: 0;
+  animation: introRise 0.8s ease forwards;
+  animation-delay: var(--section-delay, 9.2s);
+}
+
+@keyframes introRise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes headlineReveal {
+  from {
+    opacity: 0;
+    transform: translateY(35px);
+    filter: blur(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro-fast,
+  .intro-headline,
+  .intro-section {
+    opacity: 1;
+    animation: none;
+    transform: none;
+    filter: none;
+  }
+}

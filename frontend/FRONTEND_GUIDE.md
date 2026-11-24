@@ -15,41 +15,39 @@ The application replaces a multi-week paper-based clearance form with an automat
 
 ---
 
-## 2. Design System: "Premium Minimalist White" + Restrained Brand Accent
+## 2. Design System: Luxury Editorial + Modern Institutional
 
 - **Theme Palette**:
-  - Background: Pure White (`#FFFFFF`, `hsl(0 0% 100%)`)
-  - Foreground: Off-black (`#09090B`, `hsl(240 10% 3.9%)`)
-  - Primary / Buttons: Solid Black (`#000000`, `hsl(0 0% 0%)`) with crisp white text (`#FFFFFF`)
-  - Restrained Brand Accent: Deep Indigo / Cobalt (`hsl(221 83% 53%)` / `#2563EB`) for subtle highlights, interactive states, and key CTAs
-  - Card & Surfaces: `#FFFFFF` with `#E5E7EB` borders (`border-border`)
-  - Muted / Secondary: `#F4F4F5` (`hsl(240 4.8% 95.9%)`)
-  - Destructive: `#EF4444` (`hsl(0 84.2% 60.2%)`)
+  - Background: Soft cool white (`#F5F8FA`, `hsl(210 25% 98%)`)
+  - Foreground: Deep slate (`#1F2937`-inspired)
+  - Primary / Brand: SVSU teal (`#0D6F89`, `hsl(193 83% 29%)`) with white text
+  - Hover / Active: Deeper teal (`#09566B`-inspired)
+  - Brand Subtle: Pale teal (`hsl(190 45% 93%)`)
+  - Card & Surfaces: White (`#FFFFFF`) with soft cool-grey borders
+  - Semantic status colors: Success green, warning amber, destructive red
   - Dark Mode: **Explicitly disabled** (no `.dark` classes).
 - **Typography**:
-  - Headings (`h1`–`h6`): **Syne** (`@fontsource/syne`, font weights 600, 700, 800)
-  - Body & UI: **Inter** (`@fontsource/inter`, font weights 400, 500, 600, 700)
+  - Headings (`h1`–`h6`): **Bodoni Moda** — refined editorial display typography.
+  - Body & UI: **Manrope** — readable interface typography for navigation, forms, tables, and controls.
+  - Fonts are loaded from Google Fonts in `index.html`; production CSP must allow `fonts.googleapis.com` in `style-src` and `fonts.gstatic.com` in `font-src`.
 - **Type Scale**:
-  - Display (Hero): `text-4xl sm:text-6xl lg:text-7xl` (`leading-[1.08]`)
-  - Page Titles (`h1`): `text-2xl sm:text-3xl` font-extrabold
-  - Section Headings (`h2`): `text-xl sm:text-2xl` font-bold
-  - Card Titles (`h3`): `text-sm sm:text-base` font-bold
+  - Display (Hero): `text-4xl sm:text-6xl lg:text-7xl`
+  - Page Titles (`h1`): `text-2xl sm:text-3xl`
+  - Section Headings (`h2`): `text-xl sm:text-2xl`
+  - Card Titles (`h3`): `text-sm sm:text-base`
   - Body Copy: `text-xs sm:text-sm` leading-relaxed
   - Eyebrows & Badges: `text-[10px] sm:text-xs` font-semibold tracking-wider uppercase
-- **Elevation Tiers**:
-  - `shadow-2xs`: Subtle hairline boundary (`0 1px 2px rgba(0,0,0,0.03)`)
-  - `shadow-xs`: Resting card elevation (`0 1px 2px 0 rgba(0,0,0,0.04)`)
-  - `shadow-card`: Hover card elevation (`0 4px 12px rgba(0,0,0,0.06)`)
+- **Cursor**:
+  - Desktop interactive elements use a large, solid geometric triangle cursor with a charcoal outline.
+  - The triangle has no stem, tail, dot, ring, or trailing animation; text fields retain the native text cursor.
+- **Elevation & Motion**:
+  - Cards use restrained hover elevation and a subtle 1px lift on fine pointers.
+  - Buttons retain clear focus rings and subtle press feedback.
+  - Existing landing-page GSAP reveal and Lenis smooth scrolling remain lazy-loaded and respect `prefers-reduced-motion`.
 - **Spacing Scale & Rhythm**:
   - Desktop Section Padding: `py-20 md:py-24`
   - Mobile Section Padding: `py-12 md:py-14`
   - Container Max Width: `max-w-7xl` with `px-4 sm:px-6 lg:px-8`
-- **Motion & Accessibility**:
-  - Animations (GSAP line reveal, Lenis smooth scrolling) are **lazy-loaded strictly on the public Landing Page (`/`)**.
-  - Respects `prefers-reduced-motion: reduce`: all transitions, animations, and marquee tickers collapse to zero duration when requested by the OS.
-  - Mix-blend-mode magnetic cursor activates strictly on fine pointers (`@media (pointer: fine)`) and disables over text inputs, textareas, and buttons.
-
----
 
 ## 3. Directory Layout & Architecture
 

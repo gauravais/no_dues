@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+
+import './LandingIntro.css'
+import { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useDocumentTitle } from '@/hooks/useDocumentTitle'
 import { Button } from '@/components/ui/button'
@@ -70,23 +72,25 @@ const PREVIEW_DEPARTMENTS = [
 
 export function LandingPage() {
   useDocumentTitle('Clearance Portal')
-  const heroRef = useRef(null)
-  const cursorRef = useRef(null)
-  const [hasFinePointer, setHasFinePointer] = useState(false)
 
-  // 1. Detect fine pointer (mouse) vs touch, and check prefers-reduced-motion
+  // Keep Lenis smooth scrolling. GSAP reveal animation removed
+  // because LandingIntro.css now controls the homepage entrance.
   useEffect(() => {
-    const isFine = window.matchMedia('(pointer: fine)').matches
-    const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    setHasFinePointer(isFine && !prefersReducedMotion)
+    const prefersReducedMotion = window.matchMedia(
+      '(prefers-reduced-motion: reduce)'
+    ).matches
 
-    // Lazy load GSAP & Lenis strictly on this route when reduced motion is NOT requested
-    if (!prefersReducedMotion) {
-      let lenisInstance = null
+    if (prefersReducedMotion) return
 
-      Promise.all([import('lenis'), import('gsap')]).then(([LenisModule, gsapModule]) => {
+    let lenisInstance = null
+    let rafId = null
+    let cancelled = false
+
+    import('lenis')
+      .then((LenisModule) => {
+        if (cancelled) return
+
         const Lenis = LenisModule.default || LenisModule
-        const gsap = gsapModule.gsap || gsapModule.default
 
         lenisInstance = new Lenis({
           duration: 1.0,
@@ -95,65 +99,34 @@ export function LandingPage() {
 
         function raf(time) {
           lenisInstance?.raf(time)
-          requestAnimationFrame(raf)
+          rafId = requestAnimationFrame(raf)
         }
-        requestAnimationFrame(raf)
 
-        if (heroRef.current) {
-          gsap.fromTo(
-            heroRef.current.querySelectorAll('.reveal-text'),
-            { opacity: 0, y: 20 },
-            { opacity: 1, y: 0, duration: 0.7, stagger: 0.12, ease: 'power2.out', clearProps: 'transform' }
-          )
-        }
-      }).catch(() => {
-        // Fallback gracefully without animations
+        rafId = requestAnimationFrame(raf)
+      })
+      .catch(() => {
+        // Fallback gracefully if Lenis fails to load
       })
 
-      return () => {
-        if (lenisInstance) {
-          lenisInstance.destroy()
-        }
+    return () => {
+      cancelled = true
+
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId)
       }
+
+      lenisInstance?.destroy()
     }
   }, [])
 
-  // 2. Custom Mix-Blend-Mode Cursor for fine pointers (disabled over inputs/buttons)
-  useEffect(() => {
-    if (!hasFinePointer) return
-
-    const handleMouseMove = (e) => {
-      if (!cursorRef.current) return
-      cursorRef.current.style.transform = `translate3d(${e.clientX - 10}px, ${e.clientY - 10}px, 0)`
-
-      const target = e.target
-      const isInput =
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.tagName === 'BUTTON' ||
-        target.closest('button') ||
-        target.closest('a')
-
-      cursorRef.current.style.opacity = isInput ? '0' : '1'
-    }
-
-    window.addEventListener('mousemove', handleMouseMove, { passive: true })
-    return () => window.removeEventListener('mousemove', handleMouseMove)
-  }, [hasFinePointer])
-
   return (
     <div className="min-h-screen bg-white text-zinc-950 font-sans selection:bg-zinc-900 selection:text-white">
-      {/* Custom Mix-Blend Cursor (pointer: fine only, never over inputs) */}
-      {hasFinePointer && (
-        <div
-          ref={cursorRef}
-          className="pointer-events-none fixed top-0 left-0 z-50 h-5 w-5 rounded-full bg-black mix-blend-difference transition-opacity duration-150 ease-out"
-          style={{ opacity: 0 }}
-        />
-      )}
 
-      {/* Sticky Navigation Bar with Frosted Glass Blur */}
-      <header className="sticky top-0 z-40 w-full border-b border-border bg-white/90 backdrop-blur-md transition-all">
+      {/* Sticky Navigation Bar */}
+      <header
+        className="intro-fast sticky top-0 z-40 w-full border-b border-border bg-white/90 backdrop-blur-md transition-all"
+        style={{ '--intro-random': '0.05s' }}
+      >
         <div className="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2 group">
             <span className="font-heading font-extrabold text-lg sm:text-xl tracking-tight text-black transition-opacity group-hover:opacity-80">
@@ -186,32 +159,39 @@ export function LandingPage() {
       </header>
 
       {/* Hero Section */}
-      <section
-        ref={heroRef}
-        className="relative overflow-hidden pt-16 pb-20 md:pt-24 md:pb-28 border-b border-border bg-gradient-to-b from-zinc-50/50 to-white"
-      >
+      <section className="relative overflow-hidden pt-16 pb-20 md:pt-24 md:pb-28 border-b border-border bg-gradient-to-b from-zinc-50/50 to-white">
         <div className="container mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 text-center relative z-10">
+
           {/* Eyebrow Pill */}
-          <div className="reveal-text inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-white shadow-2xs text-xs font-medium text-zinc-800 mb-6">
+          <div
+            className="intro-fast inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-white shadow-2xs text-xs font-medium text-zinc-800 mb-6"
+            style={{ '--intro-random': '0.15s' }}
+          >
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>Digital Security Deposit Refund & Clearance System</span>
           </div>
 
           {/* Main Headline */}
-          <h1 className="reveal-text font-heading text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-black leading-[1.08] mb-6">
+          <h1 className="intro-headline font-heading text-4xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-black leading-[1.08] mb-6">
             Autonomous university clearance.
             <br />
             <span className="text-zinc-400 font-bold">Zero paper forms.</span>
           </h1>
 
           {/* Subheading */}
-          <p className="reveal-text text-base sm:text-lg text-zinc-600 max-w-2xl mx-auto mb-8 leading-relaxed font-normal">
+          <p
+            className="intro-fast text-base sm:text-lg text-zinc-600 max-w-2xl mx-auto mb-8 leading-relaxed font-normal"
+            style={{ '--intro-random': '0.2s' }}
+          >
             A parallel departmental clearance workflow for Shri Vishwakarma Skill University.
             Students apply once; all departments verify simultaneously; the Chairperson signs off; and security deposits are refunded automatically.
           </p>
 
-          {/* Dual CTAs with Strict Hierarchy */}
-          <div className="reveal-text flex flex-col sm:flex-row items-center justify-center gap-3 mb-16">
+          {/* Dual CTAs */}
+          <div
+            className="intro-fast flex flex-col sm:flex-row items-center justify-center gap-3 mb-16"
+            style={{ '--intro-random': '0.3s' }}
+          >
             <Button
               asChild
               size="lg"
@@ -231,9 +211,13 @@ export function LandingPage() {
             </Button>
           </div>
 
-          {/* In-Code Product Visual (Stylized Clearance Dossier Card with 10 Parallel Departments) */}
-          <div className="reveal-text mx-auto max-w-4xl text-left">
+          {/* Product Visual */}
+          <div
+            className="intro-fast mx-auto max-w-4xl text-left"
+            style={{ '--intro-random': '0.35s' }}
+          >
             <div className="rounded-2xl border border-border bg-white p-4 sm:p-6 shadow-card ring-1 ring-zinc-900/5 transition-all">
+
               {/* Card Topbar */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-border gap-3">
                 <div className="flex items-center gap-3">
@@ -318,7 +302,10 @@ export function LandingPage() {
       </section>
 
       {/* Infinite Department Marquee Ticker */}
-      <section className="border-b border-border bg-zinc-50/70 py-4 overflow-hidden">
+      <section
+        className="intro-section border-b border-border bg-zinc-50/70 py-4 overflow-hidden"
+        style={{ '--section-delay': '9.5s' }}
+      >
         <div className="flex w-max animate-marquee space-x-8">
           {[...DEPARTMENTS_MARQUEE, ...DEPARTMENTS_MARQUEE].map((dept, index) => (
             <div
@@ -332,8 +319,11 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* "How It Works" Section with Connected Visual Progression */}
-      <section className="py-20 md:py-24 bg-white border-b border-border">
+      {/* How It Works Section */}
+      <section
+        className="intro-section py-20 md:py-24 bg-white border-b border-border"
+        style={{ '--section-delay': '10s' }}
+      >
         <div className="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-16">
             <h2 className="font-heading text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-950 mb-3">
@@ -380,11 +370,15 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Public QR Verification Callout with Mock Certificate */}
-      <section className="py-20 md:py-24 bg-zinc-50 border-b border-border">
+      {/* Public QR Verification Section */}
+      <section
+        className="intro-section py-20 md:py-24 bg-zinc-50 border-b border-border"
+        style={{ '--section-delay': '10.5s' }}
+      >
         <div className="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            {/* Left Column: Explanatory Copy */}
+
+            {/* Left Column */}
             <div className="space-y-5">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white border border-border text-xs font-semibold text-zinc-800 shadow-2xs">
                 <QrCode className="w-3.5 h-3.5 text-zinc-700" />
@@ -407,7 +401,7 @@ export function LandingPage() {
               </div>
             </div>
 
-            {/* Right Column: Stylized Mock Certificate Visual */}
+            {/* Right Column: Mock Certificate */}
             <div className="rounded-xl border border-border bg-white p-6 shadow-card space-y-4 font-sans relative">
               <div className="flex items-center justify-between pb-3 border-b border-border">
                 <div>
@@ -441,7 +435,7 @@ export function LandingPage() {
                   </div>
                 </div>
 
-                {/* QR Code Placeholder Box */}
+                {/* QR Code Placeholder */}
                 <div className="col-span-1 rounded-lg border border-dashed border-zinc-300 p-2 flex flex-col items-center justify-center text-center bg-zinc-50/50">
                   <QrCode className="w-10 h-10 text-zinc-800 mb-1" />
                   <span className="text-[9px] text-zinc-500 font-mono">Scan to Verify</span>
@@ -457,8 +451,11 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Final Call to Action Band */}
-      <section className="py-16 md:py-20 bg-white border-b border-border">
+      {/* Final Call to Action */}
+      <section
+        className="intro-section py-16 md:py-20 bg-white border-b border-border"
+        style={{ '--section-delay': '11s' }}
+      >
         <div className="container mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 text-center space-y-6">
           <h2 className="font-heading text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-950">
             Ready to initiate university clearance?
@@ -479,10 +476,14 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* Polished Multi-Column Footer */}
-      <footer className="bg-white py-12 border-t border-border">
+      {/* Footer */}
+      <footer
+        className="intro-section bg-white py-12 border-t border-border"
+        style={{ '--section-delay': '11.5s' }}
+      >
         <div className="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-8 pb-8 border-b border-zinc-100">
+
             {/* Col 1: Wordmark & Disclaimer */}
             <div className="md:col-span-2 space-y-3">
               <span className="font-heading font-extrabold text-base tracking-tight text-black block">

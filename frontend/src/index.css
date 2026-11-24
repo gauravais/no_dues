@@ -1,67 +1,147 @@
 @import "tw-animate-css";
-@import "@fontsource-variable/geist";
 @tailwind base; /* wording-ok */
 @tailwind components; /* wording-ok */
 @tailwind utilities; /* wording-ok */
 
 @layer base {
   :root {
-    --font-heading: 'Syne', sans-serif;
-    --font-sans: 'Inter', sans-serif;
+    --font-heading: "Outfit", sans-serif;
+    --font-sans: "Manrope", sans-serif;
 
-    /* Base Palette: Pure Minimalist White */
-    --background: 0 0% 100%;           /* #ffffff */
-    --foreground: 240 10% 3.9%;        /* #09090b */
-    --card: 0 0% 100%;                 /* #ffffff */
-    --card-foreground: 240 10% 3.9%;   /* #09090b */
+    /* Luxury editorial / modern institutional palette */
+    --background: 0 0% 93.33%;
+    --foreground: 213 28% 17%;
+    --card: 0 0% 100%;
+    --card-foreground: 213 28% 17%;
     --popover: 0 0% 100%;
-    --popover-foreground: 240 10% 3.9%;
+    --popover-foreground: 213 28% 17%;
 
-    /* Primary: Solid Black fill with White text */
-    --primary: 0 0% 0%;                /* #000000 */
-    --primary-foreground: 0 0% 100%;   /* #ffffff */
+    /* Brand teal #0D6F89 */
+    --primary: 193 83% 29%;
+    --primary-foreground: 0 0% 100%;
 
-    /* Secondary & Muted */
-    --secondary: 240 4.8% 95.9%;       /* #f4f4f5 */
-    --secondary-foreground: 240 5.9% 10%;
-    --muted: 240 4.8% 95.9%;           /* #f4f4f5 */
-    --muted-foreground: 240 3.8% 46.1%;/* #71717a */
+    --secondary: 190 35% 94%;
+    --secondary-foreground: 193 75% 23%;
+    --muted: 210 20% 95%;
+    --muted-foreground: 215 12% 45%;
 
-    /* Restrained Accent: Deep Indigo / Cobalt for key CTAs and highlights */
-    --brand: 221 83% 53%;              /* #2563eb */
+    --brand: 193 83% 29%;
     --brand-foreground: 0 0% 100%;
-    --brand-subtle: 214 95% 93%;       /* #dbeafe */
+    --brand-subtle: 190 45% 93%;
 
-    --accent: 240 4.8% 95.9%;
-    --accent-foreground: 240 5.9% 10%;
+    --accent: 190 35% 94%;
+    --accent-foreground: 193 75% 23%;
 
-    /* Semantic Status */
-    --destructive: 0 84.2% 60.2%;      /* #ef4444 */
+    /* Semantic states retain familiar meanings */
+    --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
 
-    /* Borders & Rings */
-    --border: 220 13% 91%;             /* #e5e7eb */
-    --input: 220 13% 91%;              /* #e5e7eb */
-    --ring: 240 5.9% 10%;              /* #18181b */
-    --radius: 0.625rem;
+    --border: 210 18% 88%;
+    --input: 210 18% 84%;
+    --ring: 193 83% 29%;
+    --radius: 0.75rem;
   }
-
   * {
     @apply border-border;
   }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply bg-background text-foreground antialiased;
+    font-family: "Manrope", sans-serif;
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
   }
+
   h1, h2, h3, h4, h5, h6 {
-    font-family: var(--font-heading);
+    font-family: "Outfit", sans-serif !important;
+    font-optical-sizing: auto;
+      letter-spacing: 0.06em;
+      word-spacing: 0.08em;
+
   }
+
+  button, input, textarea, select {
+    font-family: "Manrope", sans-serif;
+  }
+
+
+  ::selection {
+    color: #ffffff;
+    background: #0D6F89;
+  }
+
+  :focus-visible {
+    outline: 2px solid #0D6F89;
+    outline-offset: 3px;
+  }
+
   
+
+  /* Restrained motion: the interface feels responsive without becoming distracting. */
+  a,
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea {
+    transition-timing-function: cubic-bezier(0.2, 0.75, 0.25, 1);
+  }
+
+  [data-slot="card"] {
+    transition:
+      border-color 220ms ease,
+      box-shadow 220ms ease,
+      transform 220ms ease;
+  }
+
+  @media (hover: hover) and (pointer: fine) {
+    [data-slot="card"]:hover {
+      border-color: hsl(var(--primary) / 0.22);
+      box-shadow: 0 12px 30px -18px hsl(var(--primary) / 0.24);
+      transform: translateY(-1px);
+    }
+  }
+
   /* Fallback visibility for text reveal elements */
   .reveal-text {
     opacity: 1;
   }
+/* Original custom cursor images */
+@media (pointer: fine) {
+  html,
+  body,
+  body * {
+    cursor: url("/cursors/small-green-triangle.png") 0 0, auto !important;
+  }
+
+  a,
+  button:not(:disabled),
+  [role="button"],
+  [data-slot="button"],
+  .cursor-pointer,
+  summary {
+    cursor: url("/cursors/small-green-hand.png") 0 0, pointer !important;
+  }
+
+  input,
+  textarea,
+  select,
+  [contenteditable="true"] {
+    cursor: text !important;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed !important;
+  }
+}
 }
 
 @keyframes marquee {
@@ -90,4 +170,12 @@
     opacity: 1 !important;
     transform: none !important;
   }
+}
+body,
+body * {
+  font-family: "Manrope", sans-serif !important;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: "Outfit", sans-serif !important;
 }

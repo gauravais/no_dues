@@ -6,6 +6,7 @@ import { ProtectedRoute } from '@/auth/ProtectedRoute'
 import { Toaster } from '@/components/ui/sonner'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { Skeleton } from '@/components/ui/skeleton'
+import WelcomeScreen from '@/components/WelcomeScreen'
 
 // Lazy-loaded Pages (code splitting)
 const LandingPage = lazy(() => import('@/pages/public/LandingPage'))
@@ -69,11 +70,11 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ErrorBoundary>
-          <BrowserRouter>
+          <BrowserRouter>        
             <Suspense fallback={<RouteFallback />}>
               <Routes>
                 {/* Public Routes */}
-                <Route path="/" element={<LandingPage />} />
+                <Route path="/" element={ <> <WelcomeScreen /> <LandingPage /></>}/>
                 <Route path="/login" element={<LoginPage />} />
                 <Route path="/signup" element={<SignupPage />} />
                 <Route path="/verify" element={<VerifyPage />} />

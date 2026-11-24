@@ -18,15 +18,15 @@
   - Strict vertical rhythm: `py-20` to `py-24` on desktop; `py-12` to `py-14` on mobile.
   - Multi-column grids: 4-column cards on desktop (`grid-cols-1 md:grid-cols-2 lg:grid-cols-4`), collapsing gracefully to 1 column on mobile.
 - **Type Scale & Hierarchy**:
-  - Display Headline: ~`48px`–`64px` (`text-4xl md:text-6xl`), tight leading (`leading-[1.1]`), bold weight (`font-extrabold`).
+  - Display Headline: ~`48px`–`64px` (`text-4xl md:text-6xl`), tight leading (`leading-[1.1]`), Bodoni Moda display styling.
   - Section Headings: `30px`–`36px` (`text-2xl md:text-4xl`), tracking tight (`tracking-tight`).
   - Card Titles: `16px`–`18px` (`text-base md:text-lg`), font-semibold.
   - Body Text: `14px`–`16px` (`text-sm md:text-base`), relaxed line height (`leading-relaxed`), muted foreground.
   - Eyebrows & Badges: `11px`–`12px` (`text-xs`), uppercase tracking wide (`tracking-wider`).
 - **Colour Usage & Contrast**:
   - Dominant surfaces: Pure white (`#ffffff`) and light zinc/neutral (`#f8fafc` / `#f4f4f5`) background alternating between sections.
-  - High-contrast text: `#09090b` for primary headlines, `#71717a` for secondary text.
-  - Restrained Accent: Deep vibrant blue/indigo (`#2563eb`) used selectively on primary buttons, badge highlights, and interactive states.
+  - High-contrast text: deep slate for primary headlines, `#71717a` for secondary text.
+  - Restrained Accent: SVSU teal (`#0D6F89`) used selectively on primary buttons, active navigation, focus rings, and interactive states.
   - Semantic Status: Minimalist amber for warnings, emerald for positive confirmation, rose for rejection.
 - **Component Styling**:
   - **Cards**: Subtle `1px` border (`#e2e8f0`), rounded corners (`rounded-xl` / `12px`), minimal elevation (`shadow-xs` / `shadow-sm`) transitioning on hover (`hover:shadow-md hover:-translate-y-0.5`).
@@ -71,3 +71,13 @@
    Ensure all interactive elements (buttons, inputs, links, tabs) feature explicit `:focus-visible` rings with offset, utilizing the brand accent token rather than the browser's default cyan/blue.
 10. **Clean Institutional Wordmark & Sticky Blur Header**:
     Maintain a text-only, bold Syne wordmark (`SVSU NO-DUES`) inside a frosted navigation header (`backdrop-blur-md bg-white/90`) that remains pinned and readable during scroll.
+
+
+## Current Approved Brand Direction
+
+- **Headings:** Bodoni Moda
+- **Body / UI:** Manrope
+- **Primary brand color:** `#0D6F89`
+- **Visual direction:** Luxury editorial meets modern institutional
+- **Cursor:** Large geometric triangle, no tail or trailing effect
+- **Implementation principle:** Preserve current page layouts, workflows, role access, authentication, and API contracts while improving presentation and micro-interactions.
